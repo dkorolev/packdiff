@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Pre-push gate: the full test pass must be green before code leaves the
+# machine. Committing locally stays free and fast; this runs once, on push.
+# Enable with:  git config core.hooksPath .githooks
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+exec ./test.sh

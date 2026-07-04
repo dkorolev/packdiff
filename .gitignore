@@ -1,0 +1,4 @@
+# Build artifacts (rebuildable via ./build.sh) and generated pages.
+/target/
+/target-wasm/
+out/

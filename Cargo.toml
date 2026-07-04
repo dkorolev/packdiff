@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["dto", "wasm", "cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Dmitry \"Dima\" Korolev <dmitry.korolev@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/dkorolev/packdiff"
+readme = "README.md"
+keywords = ["git", "diff", "code-review", "html", "wasm"]
+categories = ["command-line-utilities", "development-tools"]
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+
+# Size-tuned release profile: the wasm module ships base64-inlined in every
+# generated HTML page, so every byte counts.
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+strip = true
+codegen-units = 1
