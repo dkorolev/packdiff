@@ -25,8 +25,11 @@ Open `review.html` anywhere — from disk (`file://`), over any static host, or
 mailed to a colleague. The page makes **zero network requests**: CSS, the
 diff, and the comment engine are all inside the one file.
 
-- **Click any diff line to comment** (Ctrl/Cmd+Enter saves). Comments persist
-  in the browser's localStorage, keyed to the exact repo + commit SHAs.
+- **Click any diff line to comment** (Ctrl/Cmd+Enter saves; markdown
+  supported). Comments persist in the browser's localStorage, keyed to the
+  exact repo + commit SHAs.
+- **Markdown files render**: `.md` files in the diff get a *View rendered*
+  toggle switching between the diff text and the rendered markdown view.
 - **Export** the review as lossless JSON, Markdown grouped by file, or
   RFC 4180 CSV — and **import** JSON back on another machine (merge by
   comment id, newer edit wins).

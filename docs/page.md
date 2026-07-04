@@ -19,7 +19,9 @@ below happens locally in your browser.
 1. **Click any diff line's code cell** (added, deleted, or context — the row
    highlights on hover). An editor opens under the line.
 2. Type; **Ctrl/Cmd+Enter** saves, **Escape** or *Cancel* discards. Empty
-   text is discarded.
+   text is discarded. Comment text is **markdown** (the subset below); the
+   editor shows raw text, saved cards show it rendered. Exports carry the
+   raw markdown, never HTML.
 3. Saved comments appear as a card under the line with the anchor
    (`file · side line N · timestamp`) and **Edit** / **Delete** buttons.
 4. The header counter tracks the total.
@@ -31,6 +33,28 @@ in creation order.
 Every save/edit/delete runs through the inlined WASM data model — see
 [wasm-abi.md](wasm-abi.md) — and the updated document is written to
 localStorage synchronously. There is no "unsaved" state.
+
+## Markdown
+
+Markdown appears in two places, both rendered by the same
+`packdiff-dto::markdown` module (natively at build time for file previews,
+via the WASM `pd_markdown_html` export for comments):
+
+- **Comment bodies** are rendered as markdown.
+- **Markdown files** (`.md`, `.markdown`, `.mdown`, `.mkd`) get a
+  **View rendered** button in their panel header, toggling between the diff
+  and the rendered post-image text. For modified files the rendered view
+  covers the diff hunks only (context + added lines), with `⋯` markers where
+  unchanged text is elided; added files render in full. Deleted and binary
+  files have no rendered view.
+
+The supported subset: ATX headings (`#`–`######`), fenced code blocks,
+flat (non-nested) `-`/`*`/`+` and `1.` lists, `>` blockquotes, `---` rules,
+paragraphs; inline `` `code` ``, `**bold**`, `*italic*`, and
+`[links](https://…)` (`http`/`https`/`mailto` targets only). Underscores are
+never emphasis, so `snake_case` stays literal. A single newline inside a
+paragraph is a hard break, GitHub-comment style. Everything is HTML-escaped
+before rendering; unsafe link schemes render as literal text.
 
 ## Where comments live
 

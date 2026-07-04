@@ -35,6 +35,7 @@
 
 pub mod diff;
 pub mod export;
+pub mod markdown;
 pub mod review;
 
 /// Version stamped into (and required of) every document this crate touches.

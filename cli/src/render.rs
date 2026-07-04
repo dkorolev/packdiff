@@ -3,6 +3,7 @@
 //! emits makes zero network requests and works from `file://`.
 
 use packdiff_dto::diff::{DiffDocument, FileDiff, FileStatus, Line};
+use packdiff_dto::markdown;
 
 pub fn esc(s: &str) -> String {
   let mut out = String::with_capacity(s.len());
@@ -51,6 +52,40 @@ fn render_commits(doc: &DiffDocument) -> String {
   out
 }
 
+/// True for paths the page offers a rendered-markdown view for.
+fn is_markdown_path(path: &str) -> bool {
+  path
+    .rsplit_once('.')
+    .is_some_and(|(_, ext)| matches!(ext.to_ascii_lowercase().as_str(), "md" | "markdown" | "mdown" | "mkd"))
+}
+
+/// The rendered-markdown view of a file's diff: each hunk's post-image lines
+/// (context + added), rendered by the dto markdown module. Modified files
+/// show hunk EXCERPTS with gap markers; added files show the whole file.
+fn render_markdown_preview(f: &FileDiff) -> String {
+  let excerpts: Vec<String> = f
+    .hunks
+    .iter()
+    .map(|hunk| {
+      let text: Vec<&str> = hunk
+        .lines
+        .iter()
+        .filter_map(|line| match line {
+          Line::Add { text, .. } | Line::Ctx { text, .. } => Some(text.as_str()),
+          Line::Del { .. } | Line::Meta { .. } => None,
+        })
+        .collect();
+      markdown::to_html(&text.join("\n"))
+    })
+    .collect();
+  let note = if f.status == FileStatus::Added {
+    ""
+  } else {
+    r#"<div class="muted note">Rendered from the new-side lines of the diff hunks; unchanged text outside the hunks is not included.</div>"#
+  };
+  format!(r#"<div class="md-preview" hidden>{note}{}</div>"#, excerpts.join(r#"<div class="md-gap">⋯</div>"#))
+}
+
 fn render_file(f: &FileDiff) -> String {
   let badge = match f.status {
     FileStatus::Modified => String::new(),
@@ -59,6 +94,10 @@ fn render_file(f: &FileDiff) -> String {
     FileStatus::Renamed => r#"<span class="badge badge-renamed">renamed</span> "#.into(),
   };
   let notes: String = f.notes.iter().map(|n| format!(r#"<div class="muted note">{}</div>"#, esc(n))).collect();
+  let renderable_markdown =
+    is_markdown_path(f.anchor_path()) && !f.binary && f.status != FileStatus::Deleted && !f.hunks.is_empty();
+  let toggle =
+    if renderable_markdown { r#"<button class="md-toggle" type="button">View rendered</button>"# } else { "" };
   let body = if f.binary {
     r#"<p class="muted">Binary file — contents not shown.</p>"#.to_string()
   } else if f.hunks.is_empty() {
@@ -90,10 +129,15 @@ fn render_file(f: &FileDiff) -> String {
                 ));
       }
     }
-    format!(r#"<table class="diff">{rows}</table>"#)
+    let table = format!(r#"<table class="diff">{rows}</table>"#);
+    if renderable_markdown {
+      format!("{table}{}", render_markdown_preview(f))
+    } else {
+      table
+    }
   };
   format!(
-    r#"<details class="file" open><summary>{badge}<span class="path">{}</span> <span class="stats"><span class="adds">+{}</span> <span class="dels">−{}</span></span></summary>{notes}{body}</details>"#,
+    r#"<details class="file" open><summary>{badge}<span class="path">{}</span> <span class="stats">{toggle}<span class="adds">+{}</span> <span class="dels">−{}</span></span></summary>{notes}{body}</details>"#,
     esc(&f.display_path()),
     f.additions,
     f.deletions,
@@ -131,7 +175,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
         r#"<header class="top">
 <h1>{title}</h1>
 <div class="range"><code>{base}</code> ({base_sha}) → <code>{head}</code> ({head_sha}) <span class="muted">· merge-base <code>{mb}</code> · generated {gen} · {tool}</span></div>
-<div class="hint">{ncommits} commit(s) · {nfiles} file(s) changed · <span class="adds">+{adds}</span> <span class="dels">−{dels}</span> · click any diff line to comment — comments stay in this browser (localStorage) until you export them.</div>
+<div class="hint">{ncommits} commit(s) · {nfiles} file(s) changed · <span class="adds">+{adds}</span> <span class="dels">−{dels}</span> · click any diff line to comment (markdown supported) — comments stay in this browser (localStorage) until you export them.</div>
 <div class="toolbar">
 <span id="comment-count">0 comments</span>
 <button id="export-json" type="button">Export JSON</button>
@@ -234,7 +278,9 @@ tr.commentable:hover td.code { outline:1px dashed var(--accent); outline-offset:
 tr.comment-row td, tr.editor-row td { background:var(--comment-bg);
   border-left:3px solid var(--comment-border); padding:8px 12px;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; font-size:13px; }
-.comment-body { white-space:pre-wrap; margin:4px 0; }
+.comment-body { margin:4px 0; }
+.comment-body > :first-child { margin-top:0; }
+.comment-body > :last-child { margin-bottom:0; }
 .comment-meta { color:var(--muted); font-size:11px; }
 .comment-actions button, .editor-row button { margin-right:6px; margin-top:4px;
   background:var(--bg); color:var(--fg); border:1px solid var(--border);
@@ -244,6 +290,23 @@ tr.comment-row td, tr.editor-row td { background:var(--comment-bg);
   font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
 #unanchored { border:1px dashed var(--comment-border); border-radius:8px;
   padding:8px 12px; margin:12px 0; background:var(--comment-bg); }
+button.md-toggle { background:var(--bg); color:var(--fg); border:1px solid var(--border);
+  border-radius:6px; padding:1px 8px; margin-right:12px; font-size:11px; cursor:pointer;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+button.md-toggle:hover { border-color:var(--accent); }
+.md-preview { padding:4px 16px 12px;
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+.md-gap { color:var(--muted); text-align:center; border-top:1px dashed var(--border);
+  margin:12px 0; padding-top:4px; user-select:none; }
+.md-preview pre, .comment-body pre { background:var(--panel); border:1px solid var(--border);
+  border-radius:6px; padding:8px; overflow-x:auto; }
+.md-preview code, .comment-body code { background:var(--panel);
+  border-radius:4px; padding:1px 4px; font-size:0.9em; }
+.md-preview pre code, .comment-body pre code { background:none; padding:0; font-size:12px; }
+.md-preview blockquote, .comment-body blockquote { border-left:3px solid var(--border);
+  margin:6px 0; padding:2px 12px; color:var(--muted); }
+.md-preview h1, .md-preview h2 { border-bottom:1px solid var(--border); padding-bottom:4px; }
+.md-preview p, .comment-body p { margin:6px 0; }
 #storage-warning, #wasm-error { display:none; color:#cf222e; font-size:12px; }
 .hint { font-size:12px; color:var(--muted); }
 "##;
@@ -361,7 +424,10 @@ const JS: &str = r##"
     meta.textContent = c.file + ' · ' + c.side.toLowerCase() + ' line ' + c.line + ' · ' + c.updated_at;
     const body = document.createElement('div');
     body.className = 'comment-body';
-    body.textContent = c.text;
+    // Markdown rendering happens in the wasm model (pd_markdown_html), which
+    // escapes ALL input; the assigned HTML contains only tags it emitted.
+    try { body.innerHTML = callWasm('pd_markdown_html', c.text); }
+    catch (e) { body.textContent = c.text; }
     const actions = document.createElement('div');
     actions.className = 'comment-actions';
     const edit = document.createElement('button');
@@ -451,6 +517,21 @@ const JS: &str = r##"
     const row = cell.parentElement;
     if (!row.classList.contains('commentable')) return;
     openEditor(row, null);
+  });
+
+  // ---- rendered-markdown toggle for .md files (pure view state) ----
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button.md-toggle');
+    if (!btn) return;
+    ev.preventDefault(); // the button lives inside <summary>: do not fold the panel
+    const file = btn.closest('details.file');
+    const table = file.querySelector('table.diff');
+    const preview = file.querySelector('.md-preview');
+    if (!table || !preview) return;
+    const showRendered = preview.hidden;
+    preview.hidden = !showRendered;
+    table.style.display = showRendered ? 'none' : '';
+    btn.textContent = showRendered ? 'View diff' : 'View rendered';
   });
 
   // ---- exports (all produced by the wasm model, not by JS) ----

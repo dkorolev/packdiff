@@ -63,7 +63,8 @@ function comment(id, line, text, updated) {
 test('exports exist', { skip: !ex }, () => {
   for (const name of ['pd_alloc', 'pd_free', 'pd_new_document', 'pd_parse_document',
     'pd_upsert_comment', 'pd_delete_comment', 'pd_merge',
-    'pd_export_json', 'pd_export_markdown', 'pd_export_csv', 'pd_storage_key']) {
+    'pd_export_json', 'pd_export_markdown', 'pd_export_csv', 'pd_storage_key',
+    'pd_markdown_html']) {
     assert.equal(typeof ex[name], 'function', name);
   }
 });
@@ -122,6 +123,15 @@ test('exports: markdown groups by file, csv quotes, json reimports', { skip: !ex
   const json = call('pd_export_json', JSON.stringify(doc));
   const back = call('pd_parse_document', json);
   assert.deepEqual(back, doc);
+});
+
+test('markdown renders and hostile input stays escaped', { skip: !ex }, () => {
+  assert.equal(call('pd_markdown_html', '**hi** `code`'),
+    '<p><strong>hi</strong> <code>code</code></p>');
+  assert.equal(call('pd_markdown_html', '<script>alert(1)</script>'),
+    '<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>');
+  const link = call('pd_markdown_html', '[x](javascript:alert(1))');
+  assert.ok(!link.includes('<a '), link);
 });
 
 test('error envelopes: invalid comment, garbage, newer schema, unknown field', { skip: !ex }, () => {

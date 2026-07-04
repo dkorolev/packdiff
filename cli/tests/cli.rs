@@ -127,6 +127,11 @@ fn end_to_end() {
   assert!(html.contains("torename.txt → renamed.txt"));
   assert!(html.contains("Binary file — contents not shown."));
   assert!(html.contains("feature change one"));
+  // Exactly one markdown file in the fixture (newfile.md) → exactly one
+  // rendered-view toggle and one server-rendered preview.
+  assert_eq!(html.matches(r#"class="md-toggle""#).count(), 1);
+  assert_eq!(html.matches(r#"class="md-preview""#).count(), 1);
+  assert!(html.contains("<h1>New</h1>"), "the markdown preview is rendered at build time");
   for id in ["export-json", "export-md", "export-csv", "copy-md", "import-json"] {
     assert!(html.contains(&format!("id=\"{id}\"")), "missing #{id}");
   }

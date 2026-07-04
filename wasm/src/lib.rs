@@ -166,6 +166,14 @@ pub extern "C" fn pd_export_csv(doc_ptr: *const u8, doc_len: u32) -> u64 {
   }
 }
 
+/// Render markdown to safe HTML (the subset in `packdiff_dto::markdown`).
+/// The input is the raw markdown text — a plain UTF-8 string, not JSON —
+/// and `Ok` carries the HTML string. Never fails on any input.
+#[no_mangle]
+pub extern "C" fn pd_markdown_html(text_ptr: *const u8, text_len: u32) -> u64 {
+  ok(serde_json::Value::String(packdiff_dto::markdown::to_html(&read_arg(text_ptr, text_len))))
+}
+
 /// `meta` as in [`pd_new_document`]; returns the localStorage key string.
 #[no_mangle]
 pub extern "C" fn pd_storage_key(meta_ptr: *const u8, meta_len: u32) -> u64 {
