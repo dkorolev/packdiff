@@ -67,6 +67,7 @@ arguments are JSON strings):
 | `pd_export_json` | `doc` | canonical pretty JSON **string** |
 | `pd_export_markdown` | `doc` | Markdown **string** |
 | `pd_export_csv` | `doc` | RFC 4180 CSV **string** |
+| `pd_range_diff` | `snapshots` (a `RangeSnapshots` JSON), `params` (`{"from": i, "to": j, "context": n}`, boundary indices with `from < to`) | `FileDiff` **array** — the sub-range diff, same shape as the build-time parser's output |
 | `pd_markdown_html` | `text` *(raw markdown, not JSON)* | safe-HTML **string** (the markdown subset in docs/page.md; all input escaped, `http`/`https`/`mailto` links only; never fails) |
 | `pd_storage_key` | `meta` | localStorage key **string** |
 

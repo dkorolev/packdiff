@@ -114,11 +114,11 @@ fn end_to_end() {
   for attr in ["src=\"http", "href=\"http", "src=\"//", "href=\"//"] {
     assert!(!html.contains(attr), "external reference: {attr}");
   }
-  // Hostile content is escaped; the only script tags are our own three
-  // (config JSON, wasm base64, app JS).
+  // Hostile content is escaped; the only script tags are our own four
+  // (config JSON, snapshots JSON, wasm base64, app JS).
   assert!(!html.contains("<script>alert(1)</script>"));
   assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
-  assert_eq!(html.matches("<script").count(), 3);
+  assert_eq!(html.matches("<script").count(), 4);
   // The wasm module is inlined (base64 of `\0asm`).
   assert!(html.contains("id=\"packdiff-wasm\">AGFzbQ"));
   // Comment anchors use the CamelCase `Side` variant names.
@@ -132,6 +132,12 @@ fn end_to_end() {
   assert_eq!(html.matches(r#"class="md-toggle""#).count(), 1);
   assert_eq!(html.matches(r#"class="md-preview""#).count(), 1);
   assert!(html.contains("<h1>New</h1>"), "the markdown preview is rendered at build time");
+  // Commit range filtering: snapshots embedded, commits selectable, one copy
+  // button per commit (two feature commits in the fixture).
+  assert!(html.contains(r#"id="packdiff-snapshots""#));
+  assert!(html.contains(r#"id="files-range""#));
+  assert_eq!(html.matches(r#"class="copy-sha""#).count(), 2);
+  assert_eq!(html.matches(r#"class="commit selectable""#).count(), 2);
   for id in ["export-json", "export-md", "export-csv", "copy-md", "import-json"] {
     assert!(html.contains(&format!("id=\"{id}\"")), "missing #{id}");
   }
@@ -142,6 +148,14 @@ fn end_to_end() {
   assert_eq!(doc["schema_version"], 1);
   assert_eq!(doc["files"].as_array().unwrap().len(), 5);
   assert_eq!(doc["base"]["name"], "main");
+  // Snapshots: one boundary per commit plus the merge base, and the binary
+  // blob is stored as null (not snapshotted).
+  let boundaries = doc["snapshots"]["boundaries"].as_array().expect("snapshots collected for 2 commits");
+  assert_eq!(boundaries.len(), 3);
+  assert_eq!(boundaries[0]["sha"], doc["merge_base"]);
+  let blobs = doc["snapshots"]["blobs"].as_object().unwrap();
+  assert!(blobs.values().any(|v| v.is_null()), "binary blob content is null");
+  assert!(blobs.values().any(|v| v.as_str().is_some_and(|s| s.contains("Brand new file."))));
   let hello =
     doc["files"].as_array().unwrap().iter().find(|f| f["new_path"] == "hello.py").expect("hello.py present in dump");
   assert_eq!(hello["status"], "Modified");

@@ -13,6 +13,32 @@ below happens locally in your browser.
   fold/unfold), with status badges (`added` / `deleted` / `renamed`), per-file
   `+/−` counts, and the diff table: old line number, new line number, code.
   Binary files show a notice instead of content.
+  With two or more commits in the range, clicking commits filters this
+  section to a sub-range (see below).
+
+## Filtering by commits
+
+When the range has two or more commits, the commit list is interactive:
+
+- **Click a commit** to see only that commit's diff. **Shift-click** another
+  commit to extend the selection to the whole contiguous range between them.
+  Clicking the only selected commit again — or the *Show full diff* button in
+  the bar that appears — returns to the full diff.
+- Every commit row has a **copy** button that copies the full 40-hex hash.
+
+Sub-range diffs are computed inside the page: the file contents at every
+commit boundary ship in the HTML (deduplicated by git blob id; binary and
+>2 MB files excluded), and the WASM model diffs the selected pair of
+boundaries on demand (`pd_range_diff`, a pure Myers line diff with three
+context lines). Notes:
+
+- **Comments are full-diff only**: sub-range views are read-only, and
+  per-commit comments are deliberately not a thing — anchors are only
+  meaningful against the full diff the storage key pins.
+- Renames are not re-detected inside a sub-range (they show as a delete plus
+  an add), and binary or unsnapshotted files show a notice instead of content.
+- A change made and reverted within the selected range correctly disappears;
+  selecting the reverting commit alone shows the revert.
 
 ## Commenting
 

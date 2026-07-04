@@ -37,6 +37,7 @@ pub mod diff;
 pub mod export;
 pub mod markdown;
 pub mod review;
+pub mod snapshot;
 
 /// Version stamped into (and required of) every document this crate touches.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -74,6 +75,10 @@ pub enum ModelError {
   /// A comment failed validation.
   #[error("invalid comment: {0}")]
   InvalidComment(String),
+  /// A commit-range request did not match the snapshot store (bad boundary
+  /// indices, or a boundary referencing a blob the store does not carry).
+  #[error("invalid snapshot range: {0}")]
+  InvalidRange(String),
 }
 
 /// The localStorage key a review document is filed under.

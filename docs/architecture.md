@@ -94,9 +94,9 @@ the layers beneath them again end-to-end:
 
 | Layer | Where | What it proves |
 | --- | --- | --- |
-| model | `dto/src/*` unit tests (24) | Parser line-numbering and statuses, validation, ordering, merge conflict rules, schema rejection, export shapes, canonical round-trips |
-| CLI | `cli/tests/cli.rs` (3, real binary + scratch git repo) | merge-base vs two-dot semantics, `--json`/`--dump-json` contracts, exit codes 2/3/4, HTML self-containment, XSS escaping, wasm inlining (skips with a hint if git is absent) |
-| WASM | `tests/wasm_abi.test.mjs` (7, Node ≥18) | The real `.wasm` under the exact page calling convention: alloc/free protocol, envelopes, every export, error paths (skips with a hint until built) |
+| model | `dto/src/*` unit tests (43) | Parser line-numbering and statuses, validation, ordering, merge conflict rules, schema rejection, export shapes, canonical round-trips |
+| CLI | `cli/tests/cli.rs` (8, real binary + scratch git repo) | merge-base vs two-dot semantics, `--json`/`--dump-json` contracts, exit codes 2/3/4, HTML self-containment, XSS escaping, wasm inlining (skips with a hint if git is absent) |
+| WASM | `tests/wasm_abi.test.mjs` (9, Node ≥18) | The real `.wasm` under the exact page calling convention: alloc/free protocol, envelopes, every export, error paths (skips with a hint until built) |
 
 `./test.sh` runs all of it, plus `cargo fmt --check` and a release-mode test
 pass. The same script is the pre-push hook (`.githooks/pre-push`; enable with

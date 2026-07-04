@@ -23,6 +23,7 @@ use std::io::{IsTerminal, Write};
 
 use git::CliError;
 use packdiff_dto::diff::{parse_unified_diff, DiffDocument};
+use packdiff_dto::snapshot::{Boundary, RangeSnapshots};
 use packdiff_dto::RefInfo;
 
 /// The compiled comment engine, inlined into every generated page.
@@ -306,12 +307,47 @@ fn write_stdout(bytes: &[u8]) -> Result<(), CliError> {
   }
 }
 
+/// Blobs larger than this are not snapshotted; sub-range diffs render such
+/// files as "contents not shown" (the binary-file treatment).
+const MAX_SNAPSHOT_BLOB_BYTES: usize = 2 * 1024 * 1024;
+
+/// File contents at every commit boundary (deduplicated by blob id) — the
+/// data behind the page's commit-range filter. `None` for ranges of fewer
+/// than two commits, where there is nothing to filter.
+fn collect_snapshots(
+  repo: &str, merge_base: &str, commits: &[packdiff_dto::diff::Commit],
+) -> Result<Option<RangeSnapshots>, CliError> {
+  if commits.len() < 2 {
+    return Ok(None);
+  }
+  let mut boundary_shas = vec![merge_base.to_string()];
+  boundary_shas.extend(commits.iter().map(|c| c.sha.clone()));
+  let mut tracked: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+  for pair in boundary_shas.windows(2) {
+    tracked.extend(git::changed_paths(repo, &pair[0], &pair[1])?);
+  }
+  let paths: Vec<String> = tracked.into_iter().collect();
+  let mut blobs = std::collections::BTreeMap::new();
+  let mut boundaries = Vec::with_capacity(boundary_shas.len());
+  for sha in &boundary_shas {
+    let files = git::tree_blobs(repo, sha, &paths)?;
+    for id in files.values() {
+      if !blobs.contains_key(id) {
+        blobs.insert(id.clone(), git::blob_text(repo, id, MAX_SNAPSHOT_BLOB_BYTES)?);
+      }
+    }
+    boundaries.push(Boundary { sha: sha.clone(), files });
+  }
+  Ok(Some(RangeSnapshots { blobs, boundaries }))
+}
+
 fn collect(args: &Args) -> Result<DiffDocument, CliError> {
   let base_sha = git::resolve_ref(&args.repo, &args.base)?;
   let head_sha = git::resolve_ref(&args.repo, &args.head)?;
   let lo = if args.merge_base { git::merge_base(&args.repo, &base_sha, &head_sha)? } else { base_sha.clone() };
   let files = parse_unified_diff(&git::diff_text(&args.repo, &lo, &head_sha, args.context)?);
   let commits = git::commits(&args.repo, &lo, &head_sha)?;
+  let snapshots = collect_snapshots(&args.repo, &lo, &commits)?;
   Ok(DiffDocument::new(
     git::repo_name(&args.repo)?,
     RefInfo { name: args.base.clone(), sha: base_sha },
@@ -320,6 +356,7 @@ fn collect(args: &Args) -> Result<DiffDocument, CliError> {
     git::iso_utc_now(),
     commits,
     files,
+    snapshots,
   ))
 }
 

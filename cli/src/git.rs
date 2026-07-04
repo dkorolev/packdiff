@@ -132,8 +132,15 @@ impl CliError {
   }
 }
 
-/// Run git and capture stdout, under the liveness watchdog.
+/// Run git and capture stdout as UTF-8, under the liveness watchdog.
 pub fn run_git(repo: &str, args: &[&str]) -> Result<String, CliError> {
+  String::from_utf8(run_git_bytes(repo, args)?)
+    .map_err(|e| CliError::Git { message: format!("git output was not UTF-8: {e}") })
+}
+
+/// Run git and capture raw stdout bytes (for blob contents, which may be
+/// binary), under the liveness watchdog.
+pub fn run_git_bytes(repo: &str, args: &[&str]) -> Result<Vec<u8>, CliError> {
   let pretty = format!("git -C {repo} {}", args.join(" "));
   if VERBOSE.load(Ordering::Relaxed) {
     eprintln!("packdiff: + {pretty}");
@@ -193,7 +200,7 @@ pub fn run_git(repo: &str, args: &[&str]) -> Result<String, CliError> {
     }
     return Err(CliError::Git { message: if stderr.is_empty() { format!("`{pretty}` failed") } else { stderr } });
   }
-  String::from_utf8(stdout).map_err(|e| CliError::Git { message: format!("git output was not UTF-8: {e}") })
+  Ok(stdout)
 }
 
 fn spawn_reader<R: Read + Send + 'static>(
@@ -288,6 +295,49 @@ pub fn commits(repo: &str, lo: &str, hi: &str) -> Result<Vec<Commit>, CliError> 
     });
   }
   Ok(commits)
+}
+
+/// Paths whose content differs between two commits, rename detection OFF —
+/// a rename tracks as delete + add, matching how sub-range diffs render.
+pub fn changed_paths(repo: &str, lo: &str, hi: &str) -> Result<Vec<String>, CliError> {
+  let out = run_git(repo, &["diff", "--name-only", "--no-renames", "-z", lo, hi])?;
+  Ok(out.split('\0').filter(|s| !s.is_empty()).map(str::to_string).collect())
+}
+
+/// `path → blob id` at commit `sha`, for the given paths only. Paths absent
+/// (or not blobs — e.g. submodule pointers) at `sha` are simply missing from
+/// the map. Paths are chunked to keep the command line bounded.
+pub fn tree_blobs(
+  repo: &str, sha: &str, paths: &[String],
+) -> Result<std::collections::BTreeMap<String, String>, CliError> {
+  let mut map = std::collections::BTreeMap::new();
+  for chunk in paths.chunks(200) {
+    let mut args: Vec<&str> = vec!["ls-tree", "-r", "-z", sha, "--"];
+    args.extend(chunk.iter().map(String::as_str));
+    let out = run_git(repo, &args)?;
+    // Entries are NUL-terminated `<mode> <type> <id>\t<path>` records.
+    for entry in out.split('\0').filter(|s| !s.is_empty()) {
+      let Some((meta, path)) = entry.split_once('\t') else { continue };
+      let mut fields = meta.split(' ');
+      let (_mode, typ, id) = (fields.next(), fields.next(), fields.next());
+      if typ == Some("blob") {
+        if let Some(id) = id {
+          map.insert(path.to_string(), id.to_string());
+        }
+      }
+    }
+  }
+  Ok(map)
+}
+
+/// A blob's content for snapshotting: `None` when it is not snapshot-worthy
+/// text (contains NUL, is not UTF-8, or exceeds `max_bytes`).
+pub fn blob_text(repo: &str, id: &str, max_bytes: usize) -> Result<Option<String>, CliError> {
+  let bytes = run_git_bytes(repo, &["cat-file", "blob", id])?;
+  if bytes.len() > max_bytes || bytes.contains(&0) {
+    return Ok(None);
+  }
+  Ok(String::from_utf8(bytes).ok())
 }
 
 /// RFC 3339 UTC "now" with second precision (the model has no clock; the CLI
