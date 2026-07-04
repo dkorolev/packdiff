@@ -16,7 +16,9 @@ cargo test --workspace --release --lib
 
 echo "== node ABI test against the real wasm module =="
 if command -v node >/dev/null 2>&1; then
-  node --test tests/
+  # Name the files explicitly: newer Node versions no longer accept a bare
+  # directory after --test.
+  node --test tests/*.test.mjs
 else
   echo "SKIP: node not found on PATH — install Node.js 18+ to run the wasm ABI test"
 fi
