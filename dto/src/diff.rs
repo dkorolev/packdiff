@@ -36,13 +36,19 @@ pub struct DiffDocument {
   pub commits: Vec<Commit>,
   /// Per-file changes, in the order git emitted them.
   pub files: Vec<FileDiff>,
+  /// File snapshots at every commit boundary, enabling in-page filtering of
+  /// the diff to any contiguous commit sub-range. `None` (and omitted from
+  /// JSON) when not collected — on older builds, or ranges of fewer than
+  /// two commits, where there is nothing to filter.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub snapshots: Option<crate::snapshot::RangeSnapshots>,
 }
 
 impl DiffDocument {
   #[allow(clippy::too_many_arguments)]
   pub fn new(
     repo: String, base: RefInfo, head: RefInfo, merge_base: String, generated_at: String, commits: Vec<Commit>,
-    files: Vec<FileDiff>,
+    files: Vec<FileDiff>, snapshots: Option<crate::snapshot::RangeSnapshots>,
   ) -> Self {
     Self {
       schema_version: SCHEMA_VERSION,
@@ -54,6 +60,7 @@ impl DiffDocument {
       generated_at,
       commits,
       files,
+      snapshots,
     }
   }
 
@@ -471,6 +478,7 @@ Binary files a/blob.bin and b/blob.bin differ
       "2026-07-03T00:00:00Z".into(),
       vec![],
       parsed(),
+      None,
     );
     let json = serde_json::to_string(&doc).unwrap();
     let back: DiffDocument = serde_json::from_str(&json).unwrap();

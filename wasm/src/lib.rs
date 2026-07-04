@@ -166,6 +166,34 @@ pub extern "C" fn pd_export_csv(doc_ptr: *const u8, doc_len: u32) -> u64 {
   }
 }
 
+/// Diff a contiguous commit sub-range from the page's embedded snapshots.
+/// `snapshots` is a `RangeSnapshots` JSON; `params` is
+/// `{"from": <boundary index>, "to": <boundary index>, "context": N}` with
+/// `from < to` (commit `k` alone is `from = k - 1, to = k`). `Ok` carries
+/// the `FileDiff` array — the same shape the build-time parser emits.
+#[no_mangle]
+pub extern "C" fn pd_range_diff(snap_ptr: *const u8, snap_len: u32, params_ptr: *const u8, params_len: u32) -> u64 {
+  #[derive(serde::Deserialize)]
+  #[serde(deny_unknown_fields)]
+  struct Params {
+    from: usize,
+    to: usize,
+    context: usize,
+  }
+  let snap: packdiff_dto::snapshot::RangeSnapshots = match serde_json::from_str(&read_arg(snap_ptr, snap_len)) {
+    Ok(s) => s,
+    Err(e) => return err(format!("invalid snapshots: {e}")),
+  };
+  let params: Params = match serde_json::from_str(&read_arg(params_ptr, params_len)) {
+    Ok(p) => p,
+    Err(e) => return err(format!("invalid params: {e}")),
+  };
+  match packdiff_dto::snapshot::range_diff(&snap, params.from, params.to, params.context) {
+    Ok(files) => ok(serde_json::to_value(files).expect("FileDiff serializes: no non-string keys")),
+    Err(e) => err(e),
+  }
+}
+
 /// Render markdown to safe HTML (the subset in `packdiff_dto::markdown`).
 /// The input is the raw markdown text — a plain UTF-8 string, not JSON —
 /// and `Ok` carries the HTML string. Never fails on any input.

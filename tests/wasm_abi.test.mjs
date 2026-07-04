@@ -64,7 +64,7 @@ test('exports exist', { skip: !ex }, () => {
   for (const name of ['pd_alloc', 'pd_free', 'pd_new_document', 'pd_parse_document',
     'pd_upsert_comment', 'pd_delete_comment', 'pd_merge',
     'pd_export_json', 'pd_export_markdown', 'pd_export_csv', 'pd_storage_key',
-    'pd_markdown_html']) {
+    'pd_markdown_html', 'pd_range_diff']) {
     assert.equal(typeof ex[name], 'function', name);
   }
 });
@@ -132,6 +132,34 @@ test('markdown renders and hostile input stays escaped', { skip: !ex }, () => {
     '<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>');
   const link = call('pd_markdown_html', '[x](javascript:alert(1))');
   assert.ok(!link.includes('<a '), link);
+});
+
+test('range diff over snapshots, exactly as the page calls it', { skip: !ex }, () => {
+  const SNAPSHOTS = JSON.stringify({
+    blobs: { one: 'alpha\nbeta\n', two: 'alpha\nBETA\n', bin: null },
+    boundaries: [
+      { sha: 's0', files: { 'a.txt': 'one' } },
+      { sha: 's1', files: { 'a.txt': 'two', 'blob.bin': 'bin' } },
+      { sha: 's2', files: { 'a.txt': 'one', 'blob.bin': 'bin' } },
+    ],
+  });
+  const files = call('pd_range_diff', SNAPSHOTS,
+    JSON.stringify({ from: 0, to: 1, context: 3 }));
+  assert.equal(files.length, 2);
+  const a = files.find((f) => f.new_path === 'a.txt');
+  assert.equal(a.status, 'Modified');
+  assert.deepEqual(a.hunks[0].lines[1], { Del: { old: 2, text: 'beta' } });
+  assert.deepEqual(a.hunks[0].lines[2], { Add: { new: 2, text: 'BETA' } });
+  assert.ok(files.find((f) => f.new_path === 'blob.bin').binary);
+  // The full range hides the reverted a.txt; blob.bin is unchanged after s1.
+  const full = call('pd_range_diff', SNAPSHOTS,
+    JSON.stringify({ from: 0, to: 2, context: 3 }));
+  assert.deepEqual(full.map((f) => f.new_path), ['blob.bin']);
+  // Errors come back as envelopes, not traps.
+  const bad = callRaw('pd_range_diff', SNAPSHOTS,
+    JSON.stringify({ from: 2, to: 1, context: 3 }));
+  assert.ok('Error' in bad);
+  assert.match(bad.Error.message, /invalid snapshot range/);
 });
 
 test('error envelopes: invalid comment, garbage, newer schema, unknown field', { skip: !ex }, () => {

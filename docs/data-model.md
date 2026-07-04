@@ -89,6 +89,33 @@ Field notes:
 - It is produced by `diff::parse_unified_diff`, a pure function over
   `git diff --no-color --no-ext-diff --find-renames -U<N>` output.
 
+### `snapshots` — commit-boundary file contents
+
+Present when the range has two or more commits; powers the page's in-place
+commit-range filter. Contents are deduplicated by git blob id; a blob stored
+as `null` was not snapshotted (binary, not UTF-8, or over 2 MB) and renders
+as "contents not shown" in sub-range views.
+
+```json
+{
+  "snapshots": {
+    "blobs": { "<blob-40-hex>": "file contents…", "<blob-40-hex>": null },
+    "boundaries": [
+      { "sha": "<40-hex>", "files": { "hello.py": "<blob-40-hex>" } }
+    ]
+  }
+}
+```
+
+- `boundaries[0]` is the diff's start (the merge base); `boundaries[k]` for
+  `k > 0` is the state after the k-th commit. Only paths touched by some
+  commit in the range appear in `files`; a missing path does not exist at
+  that boundary.
+- `snapshot::range_diff(snapshots, from, to, context)` (WASM:
+  `pd_range_diff`) produces the `FileDiff` array between two boundaries via a
+  pure Myers line diff. Renames are not re-detected: within a sub-range a
+  rename is a delete plus an add.
+
 ## `ReviewDocument`
 
 The mutable review state. Lives in the browser's localStorage; every mutation

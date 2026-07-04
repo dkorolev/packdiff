@@ -38,17 +38,32 @@ fn render_commits(doc: &DiffDocument) -> String {
   if doc.commits.is_empty() {
     return r#"<p class="muted">No commits in range.</p>"#.to_string();
   }
-  let mut out = String::from(r#"<table class="commits">"#);
-  for c in &doc.commits {
+  // Rows are selectable (range filtering) only when snapshots were collected.
+  let selectable = if doc.snapshots.is_some() { " selectable" } else { "" };
+  let mut out = String::new();
+  if doc.snapshots.is_some() {
+    out.push_str(
+      r#"<div class="hint">Click a commit to see only its diff; shift-click extends the selection to a range. Commenting works on the full diff only.</div>"#,
+    );
+  }
+  out.push_str(r#"<table class="commits">"#);
+  for (i, c) in doc.commits.iter().enumerate() {
     out.push_str(&format!(
-            r#"<tr><td class="sha"><code>{}</code></td><td class="subject">{}</td><td class="author">{}</td><td class="date">{}</td></tr>"#,
-            esc(&c.short),
-            esc(&c.subject),
-            esc(&c.author),
-            esc(&c.date),
+            r#"<tr class="commit{selectable}" data-index="{index}" data-sha="{sha}"><td class="sha"><code>{short}</code><button class="copy-sha" type="button" title="Copy the full commit hash">copy</button></td><td class="subject">{subject}</td><td class="author">{author}</td><td class="date">{date}</td></tr>"#,
+            index = i + 1,
+            sha = esc(&c.sha),
+            short = esc(&c.short),
+            subject = esc(&c.subject),
+            author = esc(&c.author),
+            date = esc(&c.date),
         ));
   }
   out.push_str("</table>");
+  if doc.snapshots.is_some() {
+    out.push_str(
+      r#"<div id="range-bar" hidden><span id="range-label"></span> <button id="range-reset" type="button">Show full diff</button></div>"#,
+    );
+  }
   out
 }
 
@@ -156,7 +171,9 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
       "merge_base": doc.merge_base,
       "generated_at": doc.generated_at,
   });
-  let config_json = config.to_string().replace("</", "<\\/");
+  // Every `<` in embedded JSON becomes the \u003c escape (identical after
+  // JSON.parse): the data can never form `</script>` or any tag in the page.
+  let config_json = config.to_string().replace('<', "\\u003c");
   let files_html: String = if doc.files.is_empty() {
     r#"<p class="muted">No changes between these refs.</p>"#.to_string()
   } else {
@@ -209,9 +226,17 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   page.push_str("<section><h2>Commits</h2>");
   page.push_str(&render_commits(doc));
   page.push_str("</section>\n<section><h2>Files changed</h2>");
+  page.push_str("<div id=\"files-full\">");
   page.push_str(&files_html);
+  page.push_str("</div><div id=\"files-range\" hidden></div>");
   page.push_str("</section>\n</main>\n");
   page.push_str(&format!("<script type=\"application/json\" id=\"packdiff-config\">{config_json}</script>\n"));
+  if let Some(snap) = &doc.snapshots {
+    let snap_json = serde_json::to_string(snap)
+      .expect("RangeSnapshots serializes: string keys only, no fallible types")
+      .replace('<', "\\u003c");
+    page.push_str(&format!("<script type=\"application/json\" id=\"packdiff-snapshots\">{snap_json}</script>\n"));
+  }
   page.push_str(&format!(
     "<script type=\"application/wasm-base64\" id=\"packdiff-wasm\">{}</script>\n",
     base64(wasm_bytes)
@@ -255,6 +280,20 @@ table.commits { width:100%; border-collapse:collapse; }
 table.commits td { padding:4px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
 table.commits td.sha { white-space:nowrap; }
 table.commits td.date, table.commits td.author { white-space:nowrap; color:var(--muted); }
+tr.commit.selectable { cursor:pointer; }
+tr.commit.selectable:hover td { background:var(--panel); }
+tr.commit.selected td { background:var(--add-bg); }
+button.copy-sha { margin-left:8px; background:var(--bg); color:var(--muted);
+  border:1px solid var(--border); border-radius:6px; padding:0 6px;
+  font-size:10px; cursor:pointer; }
+button.copy-sha:hover { border-color:var(--accent); color:var(--fg); }
+#range-bar { border:1px solid var(--border); border-radius:8px; background:var(--panel);
+  padding:8px 12px; margin:10px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+#range-bar[hidden] { display:none; }
+#range-bar button { background:var(--bg); color:var(--fg); border:1px solid var(--border);
+  border-radius:6px; padding:2px 10px; font-size:12px; cursor:pointer; }
+#range-bar button:hover { border-color:var(--accent); }
+#range-label { font-weight:600; }
 details.file { border:1px solid var(--border); border-radius:8px; margin:12px 0; overflow:hidden; }
 details.file > summary { cursor:pointer; padding:8px 12px; background:var(--panel);
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; }
@@ -533,6 +572,161 @@ const JS: &str = r##"
     table.style.display = showRendered ? 'none' : '';
     btn.textContent = showRendered ? 'View diff' : 'View rendered';
   });
+
+  // ---- commit range filtering ----
+  // View state only: the sub-range diff itself is computed by the wasm model
+  // (pd_range_diff) from the embedded snapshots. Boundary i is the state
+  // after commit i (0 = merge base), so commits [from..to] diff as
+  // pd_range_diff(from - 1, to). Comments are full-diff only by design.
+  const snapTag = document.getElementById('packdiff-snapshots');
+  const SNAPSHOTS = snapTag ? snapTag.textContent : null;
+  let rangeFrom = null, rangeTo = null; // 1-based commit indices, inclusive
+
+  document.addEventListener('click', (ev) => {
+    const copy = ev.target.closest('button.copy-sha');
+    if (copy) {
+      copyText(copy.closest('tr').dataset.sha, copy);
+      return;
+    }
+    const row = ev.target.closest('tr.commit.selectable');
+    if (!row || !SNAPSHOTS) return;
+    const idx = Number(row.dataset.index);
+    if (ev.shiftKey && rangeFrom !== null) {
+      rangeFrom = Math.min(rangeFrom, idx);
+      rangeTo = Math.max(rangeTo, idx);
+    } else if (rangeFrom === idx && rangeTo === idx) {
+      rangeFrom = rangeTo = null; // clicking the sole selected commit deselects
+    } else {
+      rangeFrom = rangeTo = idx;
+    }
+    applyRange();
+  });
+  const rangeReset = document.getElementById('range-reset');
+  if (rangeReset) rangeReset.addEventListener('click', () => {
+    rangeFrom = rangeTo = null;
+    applyRange();
+  });
+
+  function applyRange() {
+    const bar = document.getElementById('range-bar');
+    const full = document.getElementById('files-full');
+    const ranged = document.getElementById('files-range');
+    document.querySelectorAll('tr.commit').forEach((tr) => {
+      const i = Number(tr.dataset.index);
+      tr.classList.toggle('selected', rangeFrom !== null && i >= rangeFrom && i <= rangeTo);
+    });
+    if (rangeFrom === null) {
+      bar.hidden = true;
+      ranged.hidden = true;
+      ranged.textContent = '';
+      full.style.display = '';
+      return;
+    }
+    let files;
+    try {
+      files = callWasm('pd_range_diff', SNAPSHOTS,
+        JSON.stringify({ from: rangeFrom - 1, to: rangeTo, context: 3 }));
+    } catch (e) {
+      alert('Range diff failed: ' + e.message);
+      return;
+    }
+    ranged.textContent = '';
+    if (files.length === 0) {
+      const p = document.createElement('p');
+      p.className = 'muted';
+      p.textContent = 'No changes in the selected commits.';
+      ranged.appendChild(p);
+    }
+    for (const f of files) ranged.appendChild(rangeFileEl(f));
+    const shortOf = (i) =>
+      document.querySelector('tr.commit[data-index="' + i + '"] code').textContent;
+    const n = rangeTo - rangeFrom + 1;
+    document.getElementById('range-label').textContent = n === 1
+      ? 'Showing commit ' + shortOf(rangeFrom) + ' only'
+      : 'Showing commits ' + shortOf(rangeFrom) + '..' + shortOf(rangeTo) + ' (' + n + ' commits)';
+    bar.hidden = false;
+    full.style.display = 'none';
+    ranged.hidden = false;
+  }
+
+  // Build a file panel for a wasm-computed FileDiff. DOM-built (values land
+  // via textContent, never markup), and NOT commentable — range rows carry
+  // no anchors on purpose.
+  function rangeFileEl(f) {
+    const details = document.createElement('details');
+    details.className = 'file';
+    details.open = true;
+    const summary = document.createElement('summary');
+    if (f.status !== 'Modified') {
+      const badge = document.createElement('span');
+      badge.className = 'badge badge-' + f.status.toLowerCase();
+      badge.textContent = f.status.toLowerCase();
+      summary.appendChild(badge);
+      summary.appendChild(document.createTextNode(' '));
+    }
+    const path = document.createElement('span');
+    path.className = 'path';
+    path.textContent = f.old_path && f.new_path && f.old_path !== f.new_path
+      ? f.old_path + ' → ' + f.new_path : (f.new_path || f.old_path);
+    summary.appendChild(path);
+    const stats = document.createElement('span');
+    stats.className = 'stats';
+    const adds = document.createElement('span');
+    adds.className = 'adds';
+    adds.textContent = '+' + f.additions;
+    const dels = document.createElement('span');
+    dels.className = 'dels';
+    dels.textContent = '−' + f.deletions;
+    stats.appendChild(adds);
+    stats.appendChild(document.createTextNode(' '));
+    stats.appendChild(dels);
+    summary.appendChild(document.createTextNode(' '));
+    summary.appendChild(stats);
+    details.appendChild(summary);
+    if (f.binary) {
+      const p = document.createElement('p');
+      p.className = 'muted';
+      p.textContent = 'Binary (or unsnapshotted oversized) file — contents not shown.';
+      details.appendChild(p);
+      return details;
+    }
+    const table = document.createElement('table');
+    table.className = 'diff';
+    const cell = (cls, text) => {
+      const td = document.createElement('td');
+      if (cls) td.className = cls;
+      td.textContent = text;
+      return td;
+    };
+    for (const hunk of f.hunks) {
+      const hr = document.createElement('tr');
+      hr.className = 'hunk';
+      hr.appendChild(cell('ln', ''));
+      hr.appendChild(cell('ln', ''));
+      hr.appendChild(cell('', hunk.header));
+      table.appendChild(hr);
+      for (const line of hunk.lines) {
+        const kind = Object.keys(line)[0];
+        const p = line[kind];
+        const tr = document.createElement('tr');
+        if (kind === 'Meta') {
+          tr.className = 'meta-line';
+          tr.appendChild(cell('ln', ''));
+          tr.appendChild(cell('ln', ''));
+          tr.appendChild(cell('', p.text));
+        } else {
+          tr.className = kind === 'Add' ? 'add' : (kind === 'Del' ? 'del' : 'ctx');
+          const sign = kind === 'Add' ? '+' : (kind === 'Del' ? '-' : ' ');
+          tr.appendChild(cell('ln', p.old !== undefined ? String(p.old) : ''));
+          tr.appendChild(cell('ln', p.new !== undefined ? String(p.new) : ''));
+          tr.appendChild(cell('code', sign + p.text));
+        }
+        table.appendChild(tr);
+      }
+    }
+    details.appendChild(table);
+    return details;
+  }
 
   // ---- exports (all produced by the wasm model, not by JS) ----
   function download(name, mime, text) {
