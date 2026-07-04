@@ -216,13 +216,37 @@ fn spawn_reader<R: Read + Send + 'static>(
   })
 }
 
+/// A case-insensitive `HEAD` prefix (`head`, `Head^^`, `head~3`) rewritten to
+/// the canonical spelling; `None` when the name is not head-like or is
+/// already canonical. Only consulted as a FALLBACK after the name failed to
+/// resolve as written, so a real ref named `head` always wins.
+fn canonical_head(name: &str) -> Option<String> {
+  let word_len = name.find(|c: char| !c.is_ascii_alphabetic()).unwrap_or(name.len());
+  let (word, rest) = name.split_at(word_len);
+  (word.eq_ignore_ascii_case("HEAD") && word != "HEAD").then(|| format!("HEAD{rest}"))
+}
+
 pub fn resolve_ref(repo: &str, name: &str) -> Result<String, CliError> {
-  let spec = format!("{name}^{{commit}}");
-  match run_git(repo, &["rev-parse", "--verify", "--quiet", &spec]) {
-    Ok(out) => Ok(out.trim().to_string()),
+  match rev_parse_commit(repo, name) {
+    Ok(sha) => Ok(sha),
     Err(e @ CliError::NotAGitRepository { .. }) => Err(e),
-    Err(_) => Err(CliError::UnknownRef { repo: repo.to_string(), name: name.to_string() }),
+    Err(_) => {
+      // Refs are data, not syntax, so this leniency applies in machine mode
+      // too; the note is a stderr diagnostic, never part of the output.
+      if let Some(canonical) = canonical_head(name) {
+        if let Ok(sha) = rev_parse_commit(repo, &canonical) {
+          eprintln!("note: `{name}` resolved as `{canonical}`");
+          return Ok(sha);
+        }
+      }
+      Err(CliError::UnknownRef { repo: repo.to_string(), name: name.to_string() })
+    }
   }
+}
+
+fn rev_parse_commit(repo: &str, name: &str) -> Result<String, CliError> {
+  let spec = format!("{name}^{{commit}}");
+  Ok(run_git(repo, &["rev-parse", "--verify", "--quiet", &spec])?.trim().to_string())
 }
 
 pub fn merge_base(repo: &str, a: &str, b: &str) -> Result<String, CliError> {
@@ -299,6 +323,18 @@ mod tests {
     assert_eq!(&now[10..11], "T");
     let year: u32 = now[..4].parse().unwrap();
     assert!(year >= 2024);
+  }
+
+  #[test]
+  fn canonical_head_rewrites_case_insensitively() {
+    assert_eq!(canonical_head("head").as_deref(), Some("HEAD"));
+    assert_eq!(canonical_head("Head^^").as_deref(), Some("HEAD^^"));
+    assert_eq!(canonical_head("hEaD~3").as_deref(), Some("HEAD~3"));
+    assert_eq!(canonical_head("head@{1}").as_deref(), Some("HEAD@{1}"));
+    assert_eq!(canonical_head("HEAD"), None, "already canonical");
+    assert_eq!(canonical_head("HEAD^^^^"), None, "already canonical");
+    assert_eq!(canonical_head("header"), None, "a real ref name, not HEAD");
+    assert_eq!(canonical_head("main"), None);
   }
 
   #[test]

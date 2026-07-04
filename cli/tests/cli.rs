@@ -286,6 +286,36 @@ fn range_syntax_and_head_default() {
 }
 
 #[test]
+fn head_refs_resolve_with_carets_and_case_insensitively() {
+  if !git_available() {
+    eprintln!("SKIP: git not found on PATH");
+    return;
+  }
+  let tmp = tmpdir("headrefs");
+  let repo = tmp.join("sample");
+  make_repo(&repo);
+  git(&repo, &["checkout", "-q", "feature"]);
+
+  // `HEAD^` as BASE: exactly the last commit of `feature` is in range.
+  for base in ["HEAD^", "head^", "Head^"] {
+    let output = Command::new(bin()).args([base, "-C", repo.to_str().unwrap(), "-o", "-"]).output().unwrap();
+    assert!(output.status.success(), "{base}: {}", String::from_utf8_lossy(&output.stderr));
+    let html = String::from_utf8_lossy(&output.stdout);
+    assert!(html.contains("newfile.md"), "{base} spans the last feature commit");
+    assert!(!html.contains("feature change one"), "{base} excludes the first feature commit");
+  }
+
+  // Deep caret chains work too: `head^^` == the merge base here, so the diff
+  // covers both feature commits.
+  let output = Command::new(bin()).args(["head^^", "-C", repo.to_str().unwrap(), "-o", "-"]).output().unwrap();
+  assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+  let html = String::from_utf8_lossy(&output.stdout);
+  assert!(html.contains("feature change one") && html.contains("feature change two"));
+
+  let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn default_output_filename() {
   if !git_available() {
     eprintln!("SKIP: git not found on PATH");

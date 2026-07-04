@@ -224,7 +224,8 @@ table.diff { width:100%; border-collapse:collapse;
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; }
 table.diff td { padding:0 8px; white-space:pre-wrap; word-break:break-all; vertical-align:top; }
 table.diff td.ln { width:1%; min-width:36px; text-align:right; color:var(--muted);
-  user-select:none; border-right:1px solid var(--border); }
+  user-select:none; border-right:1px solid var(--border);
+  white-space:nowrap; word-break:normal; }
 tr.add td { background:var(--add-bg); }
 tr.del td { background:var(--del-bg); }
 tr.hunk td, tr.meta-line td { background:var(--panel); color:var(--muted); padding:2px 8px; }

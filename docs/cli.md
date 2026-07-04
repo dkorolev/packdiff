@@ -23,7 +23,10 @@ the file, so the output is complete on its own.
 
 Ref names are resolved with `rev-parse --verify <ref>^{commit}`, so anything
 git accepts works: `main`, `origin/main`, `v1.2.0`, `HEAD~3`, a full or
-abbreviated SHA.
+abbreviated SHA. `HEAD` is additionally accepted case-insensitively
+(`head^^^^` resolves as `HEAD^^^^`, with a stderr note) — as a fallback only,
+so a real ref literally named `head` still wins. Ref names are data, not
+syntax, so this leniency applies in machine mode too.
 
 ## Options
 
