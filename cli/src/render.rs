@@ -74,31 +74,56 @@ fn is_markdown_path(path: &str) -> bool {
     .is_some_and(|(_, ext)| matches!(ext.to_ascii_lowercase().as_str(), "md" | "markdown" | "mdown" | "mkd"))
 }
 
-/// The rendered-markdown view of a file's diff: each hunk's post-image lines
-/// (context + added), rendered by the dto markdown module. Modified files
-/// show hunk EXCERPTS with gap markers; added files show the whole file.
+/// The rendered-markdown view of a file's diff: consecutive runs of
+/// context / added / removed lines render separately, added runs tinted
+/// green and removed runs red. Modified files show hunk EXCERPTS with gap
+/// markers; added files show the whole file. Multi-line markdown constructs
+/// that straddle a change boundary render as separate blocks — inherent to
+/// rendering a diff, not a bug.
 fn render_markdown_preview(f: &FileDiff) -> String {
-  let excerpts: Vec<String> = f
-    .hunks
-    .iter()
-    .map(|hunk| {
-      let text: Vec<&str> = hunk
-        .lines
-        .iter()
-        .filter_map(|line| match line {
-          Line::Add { text, .. } | Line::Ctx { text, .. } => Some(text.as_str()),
-          Line::Del { .. } | Line::Meta { .. } => None,
-        })
-        .collect();
-      markdown::to_html(&text.join("\n"))
-    })
-    .collect();
+  #[derive(PartialEq, Clone, Copy)]
+  enum Run {
+    Ctx,
+    Add,
+    Del,
+  }
+  let mut chunks: Vec<String> = Vec::new();
+  for (i, hunk) in f.hunks.iter().enumerate() {
+    if i > 0 {
+      chunks.push(r#"<div class="md-gap">⋯</div>"#.to_string());
+    }
+    let mut runs: Vec<(Run, Vec<&str>)> = Vec::new();
+    for line in &hunk.lines {
+      let (kind, text) = match line {
+        Line::Ctx { text, .. } => (Run::Ctx, text.as_str()),
+        Line::Add { text, .. } => (Run::Add, text.as_str()),
+        Line::Del { text, .. } => (Run::Del, text.as_str()),
+        Line::Meta { .. } => continue,
+      };
+      match runs.last_mut() {
+        Some((k, lines)) if *k == kind => lines.push(text),
+        _ => runs.push((kind, vec![text])),
+      }
+    }
+    for (kind, lines) in runs {
+      let html = markdown::to_html(&lines.join("\n"));
+      if html.is_empty() {
+        continue;
+      }
+      let class = match kind {
+        Run::Ctx => "md-run",
+        Run::Add => "md-run md-run-add",
+        Run::Del => "md-run md-run-del",
+      };
+      chunks.push(format!(r#"<div class="{class}">{html}</div>"#));
+    }
+  }
   let note = if f.status == FileStatus::Added {
     ""
   } else {
-    r#"<div class="muted note">Rendered from the new-side lines of the diff hunks; unchanged text outside the hunks is not included.</div>"#
+    r#"<div class="muted note">Rendered from the diff hunks — green added, red removed; unchanged text outside the hunks is not included.</div>"#
   };
-  format!(r#"<div class="md-preview" hidden>{note}{}</div>"#, excerpts.join(r#"<div class="md-gap">⋯</div>"#))
+  format!(r#"<div class="md-preview" hidden>{note}{}</div>"#, chunks.join(""))
 }
 
 fn render_file(f: &FileDiff) -> String {
@@ -337,6 +362,14 @@ button.md-toggle:hover { border-color:var(--accent); }
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
 .md-gap { color:var(--muted); text-align:center; border-top:1px dashed var(--border);
   margin:12px 0; padding-top:4px; user-select:none; }
+.md-run-add { background:var(--add-bg); border-left:3px solid #1a7f37;
+  padding:2px 10px; margin:4px 0; border-radius:4px; }
+.md-run-del { background:var(--del-bg); border-left:3px solid #cf222e;
+  padding:2px 10px; margin:4px 0; border-radius:4px; }
+@media (prefers-color-scheme: dark) {
+  .md-run-add { border-left-color:#3fb950; }
+  .md-run-del { border-left-color:#f85149; }
+}
 .md-preview pre, .comment-body pre { background:var(--panel); border:1px solid var(--border);
   border-radius:6px; padding:8px; overflow-x:auto; }
 .md-preview code, .comment-body code { background:var(--panel);

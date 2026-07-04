@@ -132,6 +132,7 @@ fn end_to_end() {
   assert_eq!(html.matches(r#"class="md-toggle""#).count(), 1);
   assert_eq!(html.matches(r#"class="md-preview""#).count(), 1);
   assert!(html.contains("<h1>New</h1>"), "the markdown preview is rendered at build time");
+  assert!(html.contains(r#"class="md-run md-run-add""#), "added markdown renders tinted green");
   // Commit range filtering: snapshots embedded, commits selectable, one copy
   // button per commit (two feature commits in the fixture).
   assert!(html.contains(r#"id="packdiff-snapshots""#));

@@ -69,10 +69,12 @@ via the WASM `pd_markdown_html` export for comments):
 - **Comment bodies** are rendered as markdown.
 - **Markdown files** (`.md`, `.markdown`, `.mdown`, `.mkd`) get a
   **View rendered** button in their panel header, toggling between the diff
-  and the rendered post-image text. For modified files the rendered view
-  covers the diff hunks only (context + added lines), with `⋯` markers where
-  unchanged text is elided; added files render in full. Deleted and binary
-  files have no rendered view.
+  and the rendered text. The rendered view is diff-aware: added runs are
+  tinted green, removed runs red, unchanged context is plain. For modified
+  files it covers the diff hunks only, with `⋯` markers where unchanged text
+  is elided; added files render in full. Deleted and binary files have no
+  rendered view. A markdown construct straddling a change boundary renders
+  as separate blocks — inherent to rendering a diff.
 
 The supported subset: ATX headings (`#`–`######`), fenced code blocks,
 flat (non-nested) `-`/`*`/`+` and `1.` lists, `>` blockquotes, `---` rules,
