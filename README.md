@@ -36,6 +36,9 @@ diff, and the comment engine are all inside the one file.
   copy any commit's full hash with one button.
 - **Navigate quickly**: a sticky nav with live counts (commits · files · LOC
   delta) and a *Files changed* index that jumps straight to any file's diff.
+- **Unified or side-by-side**: a nav toggle switches the whole diff between
+  unified and split views (enabled once the window is wide enough for the font
+  size); commenting works on either.
 - **Export** the review as lossless JSON, Markdown grouped by file, or
   RFC 4180 CSV — and **import** JSON back on another machine (merge by
   comment id, newer edit wins).
@@ -178,9 +181,10 @@ pre-push hook) and merges (GitHub Actions CI) — see
 
 ## Limitations (v0.1)
 
-Unified diff view only (no side-by-side, no syntax or word-level
-highlighting); comments carry across regenerated diffs via export → import
-rather than automatically; localStorage is per-browser-profile by nature.
+No syntax or word-level highlighting; the side-by-side view needs a
+wide-enough window; comments carry across regenerated diffs via
+export → import rather than automatically; localStorage is
+per-browser-profile by nature.
 
 ## License
 

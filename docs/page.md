@@ -12,7 +12,8 @@ below happens locally in your browser.
   carrying live counts: **Commits** (N), **Files changed** (N), and **Diff**
   (`+adds −dels`). The link for the section you are scrolling through is
   highlighted. When a commit range is selected the Files and Diff counts
-  update to that sub-range.
+  update to that sub-range. On the right, a **Side-by-side** button toggles
+  the diff view (see below).
 - **Commits** — the commit list for the diffed range, oldest first.
 - **Files changed** — a compact index, one row per file with its status
   badge and `+/−` counts; click a row to jump to that file's diff panel.
@@ -22,6 +23,20 @@ below happens locally in your browser.
   While you scroll through a file, its path row stays pinned under the nav so
   you can fold it away without scrolling back up. Binary files show a notice
   instead of content.
+
+## Unified vs side-by-side
+
+The **Side-by-side** button in the nav toggles the whole diff between the
+default unified view and a two-column split (old on the left, new on the
+right, with removed and added runs paired row for row). It is enabled only
+when the window is at least ~90em wide *relative to the current font size*, so
+zooming in or using a large font raises the threshold in pixels; if you narrow
+the window below the threshold while split, the page snaps back to unified and
+disables the button. Commenting works identically in both views — a comment
+made on a left (old) or right (new) cell anchors the same way it would in the
+unified view, and switching views moves existing comment cards to the
+matching rows. The split tables are built in the browser from the unified
+rows, so there is no extra data in the file.
 
 ## Filtering by commits
 
