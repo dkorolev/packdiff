@@ -13,4 +13,6 @@ description = "Pack a git diff into one self-contained HTML review page — with
 [dependencies]
 packdiff-dto = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+indicatif = "0.17"

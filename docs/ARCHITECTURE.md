@@ -63,7 +63,7 @@ Each layer is tested through its real interface, and the heavier layers test the
 | Layer | Where | What it proves |
 | --- | --- | --- |
 | model | `dto/src/*` unit tests (43) | Parser line-numbering and statuses, validation, ordering, merge conflict rules, schema rejection, export shapes, canonical round-trips |
-| CLI | `cli/tests/cli.rs` (8, real binary + scratch git repo) | merge-base vs two-dot semantics, `--json`/`--dump-json` contracts, exit codes 2/3/4, HTML self-containment, XSS escaping, wasm inlining (skips with a hint if git is absent) |
+| CLI | `cli/tests/cli.rs` (9, real binary + scratch git repo) | merge-base vs two-dot semantics, `--json`/`--dump-json` contracts, exit codes 2/3/4, HTML self-containment, XSS escaping, wasm inlining (skips with a hint if git is absent) |
 | WASM | `tests/wasm_abi.test.mjs` (9, Node ≥18) | The real `.wasm` under the exact page calling convention: alloc/free protocol, envelopes, every export, error paths (skips with a hint until built) |
 
 `./test.sh` runs all of it, plus `cargo fmt --check` and a release-mode test pass. The same script is the pre-push hook (`.githooks/pre-push`; enable with `git config core.hooksPath .githooks`) and the CI gate (`.github/workflows/ci.yml`). A clean checkout stays green: tests missing a prerequisite (git, Node) skip with a hint rather than fail.
@@ -75,6 +75,8 @@ The page follows a binary heuristic: anything with real logic or state is strong
 ## External processes and liveness
 
 git is the one external process. Every invocation is fallible and liveness-bounded (`cli/src/git.rs`): output is drained on reader threads, a watchdog kills the process after 5 minutes of total silence, and once a command exceeds 10 seconds a status line is emitted to stderr every ~10 s so callers can tell packdiff is alive. `--verbose` additionally echoes each git command line and its wall time.
+
+Above that, `cli/src/progress.rs` reports whole-run progress on stderr: an indicatif bar (stage, counts, ETA) at a terminal, and in machine mode one `{ "Progress": { ... } }` JSON document per line — on every stage change and at least once per second — ending with a `Done` report only on success (see [CLI.md](CLI.md#liveness-and-progress)).
 
 ## Publishing
 

@@ -352,6 +352,63 @@ fn head_refs_resolve_with_carets_and_case_insensitively() {
 }
 
 #[test]
+fn machine_mode_streams_progress_on_stderr() {
+  if !git_available() {
+    eprintln!("SKIP: git not found on PATH");
+    return;
+  }
+  let tmp = tmpdir("progress");
+  let repo = tmp.join("sample");
+  make_repo(&repo);
+  let out = tmp.join("diff.html");
+  let output = Command::new(bin())
+    .args(["main", "feature", "-C", repo.to_str().unwrap(), "-o", out.to_str().unwrap()])
+    .output()
+    .unwrap();
+  assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+  // stderr: every non-empty line is one single-key `Progress` document.
+  // (Stage changes report immediately, so even this sub-second run streams.)
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  let reports: Vec<serde_json::Value> = stderr
+    .lines()
+    .filter(|l| !l.trim().is_empty())
+    .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("non-JSON stderr line {l:?}: {e}")))
+    .collect();
+  assert!(!reports.is_empty(), "no progress lines at all");
+  let mut prev_done = 0;
+  for r in &reports {
+    let obj = r.as_object().expect("progress line is an object");
+    assert_eq!(obj.keys().collect::<Vec<_>>(), ["Progress"], "single-key union document");
+    let p = &r["Progress"];
+    assert!(p["stage"].is_string() && p["elapsed_ms"].is_u64(), "{p}");
+    let (done, total) = (p["done"].as_u64().unwrap(), p["total"].as_u64().unwrap());
+    assert!(done <= total, "done exceeds total: {p}");
+    assert!(done >= prev_done, "done went backwards: {p}");
+    prev_done = done;
+  }
+  let stages: Vec<&str> = reports.iter().map(|r| r["Progress"]["stage"].as_str().unwrap()).collect();
+  for stage in ["Resolve", "MergeBase", "Diff", "Commits", "Snapshots", "Render", "Write", "Done"] {
+    assert!(stages.contains(&stage), "stage {stage} never reported: {stages:?}");
+  }
+  let last = &reports.last().unwrap()["Progress"];
+  assert_eq!(last["stage"], "Done", "the stream ends with Done");
+  assert_eq!(last["done"], last["total"], "Done reports full completion");
+
+  // stdout stays exactly one `Packed` document — progress never leaks there.
+  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  assert!(doc.get("Packed").is_some());
+
+  // A failing run must NOT report `Done`.
+  let output = Command::new(bin()).args(["main", "no-such-branch", "-C", repo.to_str().unwrap()]).output().unwrap();
+  assert_eq!(output.status.code(), Some(4));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(!stderr.contains("\"Done\""), "error path leaked a Done report: {stderr}");
+
+  let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn default_output_filename() {
   if !git_available() {
     eprintln!("SKIP: git not found on PATH");

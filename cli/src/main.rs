@@ -17,6 +17,7 @@
 //!   quietly.
 
 mod git;
+mod progress;
 mod render;
 
 use std::io::{IsTerminal, Write};
@@ -25,6 +26,7 @@ use git::CliError;
 use packdiff_dto::diff::{parse_unified_diff, DiffDocument};
 use packdiff_dto::snapshot::{Boundary, RangeSnapshots};
 use packdiff_dto::RefInfo;
+use progress::{Progress, Stage};
 
 /// The compiled comment engine, inlined into every generated page.
 const WASM: &[u8] = include_bytes!(env!("PACKDIFF_WASM_PATH"));
@@ -315,25 +317,32 @@ const MAX_SNAPSHOT_BLOB_BYTES: usize = 2 * 1024 * 1024;
 /// data behind the page's commit-range filter. `None` for ranges of fewer
 /// than two commits, where there is nothing to filter.
 fn collect_snapshots(
-  repo: &str, merge_base: &str, commits: &[packdiff_dto::diff::Commit],
+  repo: &str, merge_base: &str, commits: &[packdiff_dto::diff::Commit], progress: &Progress,
 ) -> Result<Option<RangeSnapshots>, CliError> {
   if commits.len() < 2 {
     return Ok(None);
   }
   let mut boundary_shas = vec![merge_base.to_string()];
   boundary_shas.extend(commits.iter().map(|c| c.sha.clone()));
+  // Known up front: one changed-paths scan per adjacent pair, one tree
+  // listing per boundary. Blob fetches are added as they are discovered.
+  progress.add_work((boundary_shas.len() - 1 + boundary_shas.len()) as u64);
   let mut tracked: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
   for pair in boundary_shas.windows(2) {
     tracked.extend(git::changed_paths(repo, &pair[0], &pair[1])?);
+    progress.step(&format!("changes {}..{}", &pair[0][..7], &pair[1][..7]));
   }
   let paths: Vec<String> = tracked.into_iter().collect();
   let mut blobs = std::collections::BTreeMap::new();
   let mut boundaries = Vec::with_capacity(boundary_shas.len());
   for sha in &boundary_shas {
     let files = git::tree_blobs(repo, sha, &paths)?;
+    progress.step(&format!("boundary {}", &sha[..7]));
     for id in files.values() {
       if !blobs.contains_key(id) {
+        progress.add_work(1);
         blobs.insert(id.clone(), git::blob_text(repo, id, MAX_SNAPSHOT_BLOB_BYTES)?);
+        progress.step(&format!("blob {}", &id[..id.len().min(8)]));
       }
     }
     boundaries.push(Boundary { sha: sha.clone(), files });
@@ -341,13 +350,23 @@ fn collect_snapshots(
   Ok(Some(RangeSnapshots { blobs, boundaries }))
 }
 
-fn collect(args: &Args) -> Result<DiffDocument, CliError> {
+fn collect(args: &Args, progress: &Progress) -> Result<DiffDocument, CliError> {
+  progress.stage(Stage::Resolve);
   let base_sha = git::resolve_ref(&args.repo, &args.base)?;
+  progress.step(&args.base);
   let head_sha = git::resolve_ref(&args.repo, &args.head)?;
+  progress.step(&args.head);
+  progress.stage(Stage::MergeBase);
   let lo = if args.merge_base { git::merge_base(&args.repo, &base_sha, &head_sha)? } else { base_sha.clone() };
+  progress.step("");
+  progress.stage(Stage::Diff);
   let files = parse_unified_diff(&git::diff_text(&args.repo, &lo, &head_sha, args.context)?);
+  progress.step("");
+  progress.stage(Stage::Commits);
   let commits = git::commits(&args.repo, &lo, &head_sha)?;
-  let snapshots = collect_snapshots(&args.repo, &lo, &commits)?;
+  progress.step("");
+  progress.stage(Stage::Snapshots);
+  let snapshots = collect_snapshots(&args.repo, &lo, &commits, progress)?;
   Ok(DiffDocument::new(
     git::repo_name(&args.repo)?,
     RefInfo { name: args.base.clone(), sha: base_sha },
@@ -367,9 +386,15 @@ fn sanitize_ref(name: &str) -> String {
 
 fn run(args: &Args, machine: bool) -> Result<(), CliError> {
   let mut warnings: Vec<String> = Vec::new();
-  let doc = collect(args)?;
+  // Dropped on any error path below, which stops reporting WITHOUT a final
+  // `Done` — only the success path ends the stream with `Done`.
+  let progress = Progress::new(machine);
+  let doc = collect(args, &progress)?;
+  progress.stage(Stage::Render);
   let page = render::render_page(&doc, args.title.as_deref(), WASM);
+  progress.step("");
 
+  progress.stage(Stage::Write);
   let out_path = match args.out.as_deref() {
     Some("-") => {
       write_stdout(page.as_bytes())?;
@@ -389,6 +414,7 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
       path
     }
   };
+  progress.step(&out_path);
 
   if let Some(dump) = &args.dump_json {
     let mut json =
@@ -396,6 +422,7 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
     json.push('\n');
     std::fs::write(dump, json).map_err(|e| CliError::Io { message: format!("cannot write {dump}: {e}") })?;
   }
+  progress.finish();
 
   if args.open {
     if out_path == "-" {

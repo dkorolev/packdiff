@@ -98,9 +98,20 @@ Two exceptions, by design: `-o -` streams the HTML page itself as the stdout dat
 
 At a terminal without `--json`, errors go to stderr as `error: <message>` and success prints one human line — `Wrote packdiff-main-feature.html (5 files, +6 −1, 2 commits)` — colored per `--color`.
 
-## Liveness
+## Liveness and progress
 
-Every git invocation runs under a watchdog: after 10 seconds of runtime a status line goes to stderr every ~10 s (`packdiff: \`git diff ...\` still running (20s elapsed)`), and a process that produces NO output for 5 minutes is killed with a `GitError` explaining that silence. Stdout stays clean; liveness is stderr-only.
+Every run reports live progress **on stderr** (stdout stays reserved for data), in the mode-appropriate form:
+
+- **At a terminal**: an [indicatif](https://crates.io/crates/indicatif) progress bar with the current stage, work counts, and the estimated time remaining. It clears itself on completion, leaving only the one-line summary. Hidden automatically when stderr is redirected.
+- **In machine mode** (`--json` or piped stdout): one single-key `{ "Progress": { ... } }` JSON document per line — emitted immediately at every stage change and at least once per second in between — so a harness always knows the stage, the counts, and the ETA:
+
+```json
+{ "Progress": { "stage": "Snapshots", "detail": "blob 439f6df7", "done": 36, "total": 50, "elapsed_ms": 2010, "eta_ms": 781 } }
+```
+
+Fields: `stage` ∈ `Resolve | MergeBase | Diff | Commits | Snapshots | Render | Write | Done`; `detail` is the current work item (absent between items); `done`/`total` are work units, where `total` grows as snapshot work is discovered and never shrinks; `elapsed_ms` counts from run start; `eta_ms` is the linear extrapolation (absent until at least one unit is done). The stream ends with a `Done` report where `done == total` — a failed run never reports `Done`, so its absence plus the exit code is a reliable failure signal.
+
+Separately, every git invocation runs under a watchdog: after 10 seconds of runtime a status line goes to stderr every ~10 s (`packdiff: \`git diff ...\` still running (20s elapsed)`), and a process that produces NO output for 5 minutes is killed with a `GitError` explaining that silence.
 
 ## Examples
 
