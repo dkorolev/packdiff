@@ -94,4 +94,4 @@ $ PACKDIFF_WASM_SRC=$PWD/wasm cargo package --workspace
 
 which verifies all three tarballs with the shim pointed at the local wasm crate instead of crates.io.
 
-The shared version is defined once in `[workspace.package]`, and the internal `packdiff-dto` dependency is pinned once in `[workspace.dependencies]` (the `cli` and `wasm` crates reference it as `{ workspace = true }`). The full release playbook — version reconciliation, ordering, and the crates.io policy — is in [publishing.md](publishing.md).
+The shared version is defined once in `[workspace.package]`, and the internal `packdiff-dto` dependency is pinned once in `[workspace.dependencies]` (the `cli` and `wasm` crates reference it as `{ workspace = true }`). The full release playbook — version reconciliation, ordering, and the crates.io policy — is in [../PUBLISHING.md](../PUBLISHING.md).
