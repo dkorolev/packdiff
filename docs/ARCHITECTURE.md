@@ -22,9 +22,9 @@ Ship the **same compiled data model to both sides of the tool**. The `packdiff-d
 
 | Crate | Dir | Kind | Deps | Role |
 | --- | --- | --- | --- | --- |
-| `packdiff-dto` | `dto/` | rlib | serde, serde_json | All data + semantics ([spec](data-model.md)) |
-| `packdiff-wasm` | `wasm/` | cdylib+rlib | dto, serde, serde_json | Transport shim only ([ABI](wasm-abi.md)) |
-| `packdiff` | `cli/` | bin `packdiff` | dto, serde_json | argv, git, HTML rendering ([CLI](cli.md)) |
+| `packdiff-dto` | `dto/` | rlib | serde, serde_json | All data + semantics ([spec](DATA-MODEL.md)) |
+| `packdiff-wasm` | `wasm/` | cdylib+rlib | dto, serde, serde_json | Transport shim only ([ABI](WASM-ABI.md)) |
+| `packdiff` | `cli/` | bin `packdiff` | dto, serde_json | argv, git, HTML rendering ([CLI](CLI.md)) |
 
 Boundary rules that keep the focus honest:
 

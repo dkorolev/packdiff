@@ -25,7 +25,7 @@ Ref names are resolved with `rev-parse --verify <ref>^{commit}`, so anything git
 | `--context N` | Context lines around each hunk (`git diff -U<N>`) | `3` |
 | `--no-merge-base` | Diff `BASE..HEAD` literally (two-dot). Default is PR semantics: `merge-base(BASE, HEAD)..HEAD` (three-dot), so commits that landed on BASE after the branch point do not pollute the review | merge-base mode |
 | `--title T` | Override the page `<title>`/heading | `repo: BASE → HEAD` |
-| `--dump-json PATH` | Additionally write the full typed [`DiffDocument`](data-model.md#diffdocument) as pretty JSON — the machine-readable form of everything on the page | off |
+| `--dump-json PATH` | Additionally write the full typed [`DiffDocument`](DATA-MODEL.md#diffdocument) as pretty JSON — the machine-readable form of everything on the page | off |
 | `--json` | Force machine mode (see below). Machine mode is auto-enabled whenever stdout is not a terminal | auto |
 | `--open` | After writing, open the page in the default browser (`xdg-open`/`open`; failure is a warning, not an error) | off |
 | `--color MODE` | `auto` \| `always` \| `never`. `auto` colors only a terminal and honors `NO_COLOR` | `auto` |
