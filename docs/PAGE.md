@@ -37,7 +37,7 @@ Sub-range diffs are computed inside the page: the file contents at every commit 
 
 Comments on deleted (red) lines anchor to the **old** line number; added and context lines anchor to the **new** one. Multiple comments on one line stack in creation order.
 
-Every save/edit/delete runs through the inlined WASM data model — see [wasm-abi.md](wasm-abi.md) — and the updated document is written to localStorage synchronously. There is no "unsaved" state.
+Every save/edit/delete runs through the inlined WASM data model — see [WASM-ABI.md](WASM-ABI.md) — and the updated document is written to localStorage synchronously. There is no "unsaved" state.
 
 ## Markdown
 
@@ -50,7 +50,7 @@ The supported subset: ATX headings (`#`–`######`), fenced code blocks, flat (n
 
 ## Where comments live
 
-In this browser's localStorage, under `packdiff:v1:<repo>:<baseSha12>..<headSha12>` ([spec](data-model.md#storage-key)). Consequences:
+In this browser's localStorage, under `packdiff:v1:<repo>:<baseSha12>..<headSha12>` ([spec](DATA-MODEL.md#storage-key)). Consequences:
 
 - Reopening the same file — or a **regenerated page for the same two SHAs** (different `--title`/`--context` included) — finds your comments again.
 - A different browser, profile, or machine does not. Neither does a diff with new commits (new SHAs → new key). In both cases, carry comments with **Export JSON → Import JSON**.
@@ -71,7 +71,7 @@ A comment whose diff line is not present in the current rendering (e.g. the page
 | **Copy Markdown** | Same as Export Markdown, to the clipboard. |
 | **Import JSON** | Merges a previously exported JSON file into this store: union by comment id, the newer `updated_at` wins on conflicts. Invalid files are rejected with the reason. |
 
-Download names are `packdiff-comments-<repo>-<baseSha7>-<headSha7>.{json,md,csv}`. Format details: [data-model.md#exports](data-model.md#exports).
+Download names are `packdiff-comments-<repo>-<baseSha7>-<headSha7>.{json,md,csv}`. Format details: [DATA-MODEL.md#exports](DATA-MODEL.md#exports).
 
 ## The comment-carry-over workflow
 

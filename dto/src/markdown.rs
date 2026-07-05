@@ -6,7 +6,7 @@
 //! are restricted to `http://` / `https://` / `mailto:` — hostile input
 //! cannot smuggle markup or `javascript:` URLs.
 //!
-//! Deliberately a SUBSET (documented in docs/page.md): ATX headings, fenced
+//! Deliberately a SUBSET (documented in docs/PAGE.md): ATX headings, fenced
 //! code blocks, flat (non-nested) lists, blockquotes, thematic breaks,
 //! paragraphs; inline `` `code` ``, `**bold**`, `*italic*`, and
 //! `[links](https://…)`. Underscores are NOT emphasis, so `snake_case`

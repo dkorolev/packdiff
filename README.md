@@ -121,11 +121,11 @@ Exit codes: `0` success · `2` usage · `3` not a git repository · `4` unknown 
 
 | Doc | Contents |
 | --- | --- |
-| [docs/cli.md](docs/cli.md) | Full CLI reference: options, exit codes, the `--json` contract, examples |
-| [docs/page.md](docs/page.md) | Using the review page: commenting, storage, exports/imports, carrying comments across regenerated diffs |
-| [docs/data-model.md](docs/data-model.md) | The schema spec: document shapes, validation, ordering, merge semantics, storage key, versioning |
-| [docs/wasm-abi.md](docs/wasm-abi.md) | The WASM ABI: memory protocol, envelopes, every export, a minimal JS bridge |
-| [docs/architecture.md](docs/architecture.md) | Crate boundaries, the wasm-embedding build pipeline, testing strategy |
+| [docs/CLI.md](docs/CLI.md) | Full CLI reference: options, exit codes, the `--json` contract, examples |
+| [docs/PAGE.md](docs/PAGE.md) | Using the review page: commenting, storage, exports/imports, carrying comments across regenerated diffs |
+| [docs/DATA-MODEL.md](docs/DATA-MODEL.md) | The schema spec: document shapes, validation, ordering, merge semantics, storage key, versioning |
+| [docs/WASM-ABI.md](docs/WASM-ABI.md) | The WASM ABI: memory protocol, envelopes, every export, a minimal JS bridge |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Crate boundaries, the wasm-embedding build pipeline, testing strategy |
 | [PUBLISHING.md](PUBLISHING.md) | Maintainer playbook: crate order, version reconciliation, the dry run, releasing to crates.io |
 
 Rust API docs: `cargo doc -p packdiff-dto --open`.

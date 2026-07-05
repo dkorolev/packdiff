@@ -29,7 +29,7 @@ packdiff-dto   (dto/)   — pure data model, no internal deps
 Two consequences:
 
 - **Publish order is `dto` → `wasm` → `cli`.** A crate cannot be published until every crate it depends on already exists on crates.io at the version it asks for.
-- The `packdiff` (cli) crate is special: its `build.rs` compiles the wasm comment engine by generating a shim crate that depends on `packdiff-wasm = "=<this version>"` **from the registry** (see [docs/architecture.md](docs/architecture.md#build-pipeline)). So `packdiff-wasm` must be published *before* `cargo publish -p packdiff` runs its verification build. The dry run below sidesteps this with `PACKDIFF_WASM_SRC`.
+- The `packdiff` (cli) crate is special: its `build.rs` compiles the wasm comment engine by generating a shim crate that depends on `packdiff-wasm = "=<this version>"` **from the registry** (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#build-pipeline)). So `packdiff-wasm` must be published *before* `cargo publish -p packdiff` runs its verification build. The dry run below sidesteps this with `PACKDIFF_WASM_SRC`.
 
 ## Where versions live (the reconciliation)
 
@@ -91,4 +91,4 @@ The third command's verification build pulls `packdiff-wasm` from the registry (
 
 - Inside the workspace, before first publish, break freely — no versioning ceremony.
 - Once published, a **breaking change bumps the minor version** (`0.1.z` → `0.2.0`), never the patch; patch releases must always be safe to take. The machine-mode `--json` shapes and the exit-code table are public API — a change to what a field or code *means* is breaking.
-- The `schema_version` inside the documents is a separate, independent axis; it changes only when the stored document shape changes (see [docs/data-model.md](docs/data-model.md)).
+- The `schema_version` inside the documents is a separate, independent axis; it changes only when the stored document shape changes (see [docs/DATA-MODEL.md](docs/DATA-MODEL.md)).
