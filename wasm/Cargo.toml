@@ -16,6 +16,6 @@ description = "WASM ABI over packdiff-dto: packdiff's in-page comment engine. No
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-packdiff-dto = { path = "../dto", version = "0.1.0" }
+packdiff-dto = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

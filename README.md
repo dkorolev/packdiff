@@ -102,7 +102,9 @@ $ cargo install --path cli         # puts `packdiff` on your PATH
 ```
 
 To publish to crates.io (maintainer note; order matters — the CLI's build
-script pulls the wasm engine from the registry):
+script pulls the wasm engine from the registry). The full playbook, including
+how the shared version is kept in one place, is in
+[docs/publishing.md](docs/publishing.md):
 
 ```console
 $ cargo publish -p packdiff-dto
@@ -160,6 +162,7 @@ the full table, and every machine-mode error carries a `stage` field.
 | [docs/data-model.md](docs/data-model.md) | The schema spec: document shapes, validation, ordering, merge semantics, storage key, versioning |
 | [docs/wasm-abi.md](docs/wasm-abi.md) | The WASM ABI: memory protocol, envelopes, every export, a minimal JS bridge |
 | [docs/architecture.md](docs/architecture.md) | Crate boundaries, the wasm-embedding build pipeline, testing strategy |
+| [docs/publishing.md](docs/publishing.md) | Maintainer playbook: crate order, version reconciliation, the dry run, releasing to crates.io |
 
 Rust API docs: `cargo doc -p packdiff-dto --open`.
 
