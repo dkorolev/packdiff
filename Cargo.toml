@@ -16,6 +16,12 @@ categories = ["command-line-utilities", "development-tools"]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
+# The internal library, pinned once here so its version lives in a single
+# place. `path` is used inside the workspace; `version` is what a published
+# crate depends on (cargo strips the path when publishing). Bump this in
+# lockstep with `workspace.package.version` above (or let `cargo release` do
+# both) — see docs/publishing.md.
+packdiff-dto = { path = "dto", version = "0.1.0" }
 
 # Size-tuned release profile: the wasm module ships base64-inlined in every
 # generated HTML page, so every byte counts.
