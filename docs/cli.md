@@ -6,27 +6,15 @@ packdiff <BASE>...<HEAD> [OPTIONS]     merge-base diff (the default semantics)
 packdiff <BASE>..<HEAD> [OPTIONS]      literal two-dot diff
 ```
 
-Packs the diff between two git refs into one self-contained HTML review page.
-The page makes zero network requests and opens from `file://`; the in-page
-comment engine (the `packdiff-dto` crate compiled to WASM) is inlined into
-the file, so the output is complete on its own.
+Packs the diff between two git refs into one self-contained HTML review page. The page makes zero network requests and opens from `file://`; the in-page comment engine (the `packdiff-dto` crate compiled to WASM) is inlined into the file, so the output is complete on its own.
 
 ## Refs and ranges
 
 - **Two positionals** — `packdiff main feature`.
-- **One positional** — `HEAD` (the current checkout) is the head:
-  `packdiff main` reviews your working branch against `main`.
-- **Git-style range** — `packdiff main...feature` (merge-base, same as the
-  default) or `packdiff main..feature` (literal). Matching git's own
-  `diff` semantics, `..` implies `--no-merge-base`. Git forbids `..` inside
-  ref names, so the split is unambiguous — tags like `v1.0.0` work fine.
+- **One positional** — `HEAD` (the current checkout) is the head: `packdiff main` reviews your working branch against `main`.
+- **Git-style range** — `packdiff main...feature` (merge-base, same as the default) or `packdiff main..feature` (literal). Matching git's own `diff` semantics, `..` implies `--no-merge-base`. Git forbids `..` inside ref names, so the split is unambiguous — tags like `v1.0.0` work fine.
 
-Ref names are resolved with `rev-parse --verify <ref>^{commit}`, so anything
-git accepts works: `main`, `origin/main`, `v1.2.0`, `HEAD~3`, a full or
-abbreviated SHA. `HEAD` is additionally accepted case-insensitively
-(`head^^^^` resolves as `HEAD^^^^`, with a stderr note) — as a fallback only,
-so a real ref literally named `head` still wins. Ref names are data, not
-syntax, so this leniency applies in machine mode too.
+Ref names are resolved with `rev-parse --verify <ref>^{commit}`, so anything git accepts works: `main`, `origin/main`, `v1.2.0`, `HEAD~3`, a full or abbreviated SHA. `HEAD` is additionally accepted case-insensitively (`head^^^^` resolves as `HEAD^^^^`, with a stderr note) — as a fallback only, so a real ref literally named `head` still wins. Ref names are data, not syntax, so this leniency applies in machine mode too.
 
 ## Options
 
@@ -47,12 +35,7 @@ syntax, so this leniency applies in machine mode too.
 
 ## Liberal for humans, canonical for machines
 
-Help always shows the one canonical form, and at a terminal the CLI accepts
-unambiguous non-canonical spellings (`--no-color`, `-v`, bare `version`),
-resolving them and printing the canonical form to stderr as a dim nudge. In
-machine mode (piped stdout or `--json`) a non-canonical invocation does NOT
-run: the CLI exits 2 with a `NonCanonicalInvocation` document naming the
-canonical syntax. Aliases in scripts rot; this keeps them out.
+Help always shows the one canonical form, and at a terminal the CLI accepts unambiguous non-canonical spellings (`--no-color`, `-v`, bare `version`), resolving them and printing the canonical form to stderr as a dim nudge. In machine mode (piped stdout or `--json`) a non-canonical invocation does NOT run: the CLI exits 2 with a `NonCanonicalInvocation` document naming the canonical syntax. Aliases in scripts rot; this keeps them out.
 
 ## Exit codes
 
@@ -67,15 +50,11 @@ canonical syntax. Aliases in scripts rot; this keeps them out.
 | `5` | `git` / `io` | git failed, hung (watchdog), or a local I/O failure |
 | `130` | — | Interrupted (Ctrl+C); a broken pipe instead ends the program quietly |
 
-The `stage` string rides inside every machine-mode error document, so scripts
-can branch on it without memorizing codes.
+The `stage` string rides inside every machine-mode error document, so scripts can branch on it without memorizing codes.
 
 ## Machine mode: the output contract
 
-Machine mode is on whenever `--json` is given OR stdout is not a terminal —
-scripts and pipelines get machine-readable output for free. Every run then
-emits exactly ONE two-space-indented, single-key union document on stdout,
-success and failure alike; the exit code remains the authoritative signal.
+Machine mode is on whenever `--json` is given OR stdout is not a terminal — scripts and pipelines get machine-readable output for free. Every run then emits exactly ONE two-space-indented, single-key union document on stdout, success and failure alike; the exit code remains the authoritative signal.
 
 Success — `{ "Packed": { ... } }`:
 
@@ -111,28 +90,17 @@ Failure — a request-specific variant with `stage` and `exit_code` inside:
 }
 ```
 
-Variants: `Packed`, `UsageError`, `NonCanonicalInvocation`,
-`NotAGitRepository`, `UnknownRef`, `GitError`, `IoError`. Scripts branch on
-the top-level key (`jq -r 'keys[0]'`) or on `stage`.
+Variants: `Packed`, `UsageError`, `NonCanonicalInvocation`, `NotAGitRepository`, `UnknownRef`, `GitError`, `IoError`. Scripts branch on the top-level key (`jq -r 'keys[0]'`) or on `stage`.
 
-Warnings land in BOTH channels: the `warnings` array in the document AND
-stderr lines, so neither scripts nor humans miss them.
+Warnings land in BOTH channels: the `warnings` array in the document AND stderr lines, so neither scripts nor humans miss them.
 
-Two exceptions, by design: `-o -` streams the HTML page itself as the stdout
-data and prints no document (`--json -o -` is refused — both would claim
-stdout), and `help`/`--version` print their text as-is.
+Two exceptions, by design: `-o -` streams the HTML page itself as the stdout data and prints no document (`--json -o -` is refused — both would claim stdout), and `help`/`--version` print their text as-is.
 
-At a terminal without `--json`, errors go to stderr as `error: <message>` and
-success prints one human line — `Wrote packdiff-main-feature.html (5 files,
-+6 −1, 2 commits)` — colored per `--color`.
+At a terminal without `--json`, errors go to stderr as `error: <message>` and success prints one human line — `Wrote packdiff-main-feature.html (5 files, +6 −1, 2 commits)` — colored per `--color`.
 
 ## Liveness
 
-Every git invocation runs under a watchdog: after 10 seconds of runtime a
-status line goes to stderr every ~10 s (`packdiff: \`git diff ...\` still
-running (20s elapsed)`), and a process that produces NO output for 5 minutes
-is killed with a `GitError` explaining that silence. Stdout stays clean;
-liveness is stderr-only.
+Every git invocation runs under a watchdog: after 10 seconds of runtime a status line goes to stderr every ~10 s (`packdiff: \`git diff ...\` still running (20s elapsed)`), and a process that produces NO output for 5 minutes is killed with a `GitError` explaining that silence. Stdout stays clean; liveness is stderr-only.
 
 ## Examples
 
@@ -161,14 +129,8 @@ $ packdiff v1.0.0...v1.1.0 -o - > /tmp/release-diff.html
 
 ## Behavior details
 
-- **Renames** are detected (`--find-renames`) and shown as `old → new`; the
-  comment anchor path is always the post-image path.
-- **Binary files** appear with a "contents not shown" notice and count toward
-  `binary_files` in the summary.
-- **Identical refs / empty range** produce a valid page stating "No changes
-  between these refs." and a summary with zero files — not an error.
-- The commit list covers `merge_base..HEAD` (or `BASE..HEAD` in two-dot
-  mode), oldest first.
-- `generated_at` is stamped once per run (RFC 3339 UTC); it is the only
-  non-deterministic byte source in the output — two runs against the same
-  SHAs differ only in that field.
+- **Renames** are detected (`--find-renames`) and shown as `old → new`; the comment anchor path is always the post-image path.
+- **Binary files** appear with a "contents not shown" notice and count toward `binary_files` in the summary.
+- **Identical refs / empty range** produce a valid page stating "No changes between these refs." and a summary with zero files — not an error.
+- The commit list covers `merge_base..HEAD` (or `BASE..HEAD` in two-dot mode), oldest first.
+- `generated_at` is stamped once per run (RFC 3339 UTC); it is the only non-deterministic byte source in the output — two runs against the same SHAs differ only in that field.

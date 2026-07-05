@@ -1,25 +1,15 @@
 # WASM ABI reference — crate `packdiff-wasm`
 
-`wasm/` compiles the data model to `wasm32-unknown-unknown` behind a small,
-hand-rolled C ABI — **no wasm-bindgen, no JS glue, empty import object** — so
-the module instantiates from `file://` with `WebAssembly.instantiate(bytes, {})`.
-The CLI inlines it base64-encoded into every generated page
-(`<script type="application/wasm-base64" id="packdiff-wasm">`), where it is the
-comment engine: the page's JavaScript is a view layer and never edits review
-state itself.
+`wasm/` compiles the data model to `wasm32-unknown-unknown` behind a small, hand-rolled C ABI — **no wasm-bindgen, no JS glue, empty import object** — so the module instantiates from `file://` with `WebAssembly.instantiate(bytes, {})`. The CLI inlines it base64-encoded into every generated page (`<script type="application/wasm-base64" id="packdiff-wasm">`), where it is the comment engine: the page's JavaScript is a view layer and never edits review state itself.
 
-The built artifact lives at
-`target-wasm/wasm32-unknown-unknown/release/packdiff_wasm.wasm` (~124 KB).
-`tests/wasm_abi.test.mjs` drives it exactly as described here.
+The built artifact lives at `target-wasm/wasm32-unknown-unknown/release/packdiff_wasm.wasm` (~124 KB). `tests/wasm_abi.test.mjs` drives it exactly as described here.
 
 ## Calling convention
 
-**Inputs.** Every string crosses as a `(ptr: u32, len: u32)` pair naming a
-UTF-8 buffer in the module's linear memory. The caller:
+**Inputs.** Every string crosses as a `(ptr: u32, len: u32)` pair naming a UTF-8 buffer in the module's linear memory. The caller:
 
 1. `ptr = pd_alloc(len)` — allocate.
-2. Write the UTF-8 bytes at `ptr` (re-view `exports.memory.buffer` *after*
-   each alloc; growth detaches old views).
+2. Write the UTF-8 bytes at `ptr` (re-view `exports.memory.buffer` *after* each alloc; growth detaches old views).
 3. Pass `(ptr, len)`. After the call returns, `pd_free(ptr, len)`.
 
 **Outputs.** Every API function returns a packed `u64` (a `BigInt` in JS):
@@ -39,10 +29,7 @@ The caller copies the bytes out, then **must** `pd_free(ptr, len)`.
 { "Error": { "message": "<what went wrong>" } }
 ```
 
-`Ok` carries a `ReviewDocument` **object** for constructive/mutating calls and
-a plain **string** for exports and the storage key. Errors never trap; invalid
-input comes back as an `Error` document (the model is panic-free by
-construction on these paths).
+`Ok` carries a `ReviewDocument` **object** for constructive/mutating calls and a plain **string** for exports and the storage key. Errors never trap; invalid input comes back as an `Error` document (the model is panic-free by construction on these paths).
 
 ## Exports
 
@@ -54,8 +41,7 @@ Memory management:
 | `pd_free` | `(ptr: u32, len: u32)` | Must be called with the exact length; null/0 is a no-op |
 | `memory` | exported linear memory | — |
 
-API (all return the packed-u64 envelope; `meta` and `doc`/`comment`/`incoming`
-arguments are JSON strings):
+API (all return the packed-u64 envelope; `meta` and `doc`/`comment`/`incoming` arguments are JSON strings):
 
 | Export | Arguments | `value` on success |
 | --- | --- | --- |
@@ -79,20 +65,15 @@ arguments are JSON strings):
   "head": { "name": "my-feature", "sha": "<40-hex>" } }
 ```
 
-Document/comment shapes and all semantics (validation, ordering, merge rules)
-are specified in [data-model.md](data-model.md) — this layer adds nothing but
-the transport.
+Document/comment shapes and all semantics (validation, ordering, merge rules) are specified in [data-model.md](data-model.md) — this layer adds nothing but the transport.
 
 ## Purity
 
-The module has no clock and no entropy source. Comment `id`s and RFC 3339
-timestamps arrive from the caller inside the comment JSON; the same call with
-the same bytes always returns the same bytes.
+The module has no clock and no entropy source. Comment `id`s and RFC 3339 timestamps arrive from the caller inside the comment JSON; the same call with the same bytes always returns the same bytes.
 
 ## Minimal JS bridge
 
-This is the page's actual bridge, reduced to its core (also mirrored in
-`tests/wasm_abi.test.mjs`):
+This is the page's actual bridge, reduced to its core (also mirrored in `tests/wasm_abi.test.mjs`):
 
 ```js
 const { instance } = await WebAssembly.instantiate(bytes, {});
@@ -125,6 +106,4 @@ const md = callWasm('pd_export_markdown', JSON.stringify(doc));
 
 ## Stability
 
-The ABI is versioned implicitly through the documents' `schema_version`: the
-function set may grow (additive) within v1; renaming or re-typing an existing
-export is a breaking change and would accompany a schema bump.
+The ABI is versioned implicitly through the documents' `schema_version`: the function set may grow (additive) within v1; renaming or re-typing an existing export is a breaking change and would accompany a schema bump.

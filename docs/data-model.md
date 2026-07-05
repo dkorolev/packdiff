@@ -1,35 +1,19 @@
 # Data model reference — crate `packdiff-dto`
 
-The `dto/` crate is the single source of truth for every piece of data
-packdiff handles. It is pure logic: no filesystem, no subprocess, no clock, no
-randomness. The CLI links it natively; the generated page runs the exact same
-crate compiled to WebAssembly. Rust API docs: `cargo doc -p packdiff-dto --open`.
+The `dto/` crate is the single source of truth for every piece of data packdiff handles. It is pure logic: no filesystem, no subprocess, no clock, no randomness. The CLI links it natively; the generated page runs the exact same crate compiled to WebAssembly. Rust API docs: `cargo doc -p packdiff-dto --open`.
 
-Both document families carry `schema_version` (currently `1`) and
-`tool: "packdiff"`.
+Both document families carry `schema_version` (currently `1`) and `tool: "packdiff"`.
 
 ## Encoding and compatibility rules
 
-- **Field names are `snake_case`; union variants are `CamelCase`** and encode
-  as **single-key objects** — `{ "Add": { "new": 2, "text": "…" } }` — never a
-  `"type"` discriminator alongside the payload. Payload-less enums
-  (`FileStatus`, `Side`) serialize as the bare variant-name string.
-- **Unknown fields are strict-rejected** (`deny_unknown_fields`) on every
-  struct: a typo or a drifted producer fails loudly at the boundary instead of
-  silently becoming "field never set."
-- Parsers **reject documents from a newer schema** than they understand
-  (`unsupported schema_version N`) and accept older ones. `schema_version` is
-  the one deliberate opt-in to long-term compatibility — review documents live
-  in users' localStorage.
-- Determinism: identical inputs produce byte-identical outputs. Ordering is
-  always explicit, and timestamps/ids are caller-supplied inputs, never
-  generated inside the model.
+- **Field names are `snake_case`; union variants are `CamelCase`** and encode as **single-key objects** — `{ "Add": { "new": 2, "text": "…" } }` — never a `"type"` discriminator alongside the payload. Payload-less enums (`FileStatus`, `Side`) serialize as the bare variant-name string.
+- **Unknown fields are strict-rejected** (`deny_unknown_fields`) on every struct: a typo or a drifted producer fails loudly at the boundary instead of silently becoming "field never set."
+- Parsers **reject documents from a newer schema** than they understand (`unsupported schema_version N`) and accept older ones. `schema_version` is the one deliberate opt-in to long-term compatibility — review documents live in users' localStorage.
+- Determinism: identical inputs produce byte-identical outputs. Ordering is always explicit, and timestamps/ids are caller-supplied inputs, never generated inside the model.
 
 ## `DiffDocument`
 
-The immutable build artifact — everything the CLI extracted from git. Written
-by `--dump-json`; the page embeds a reduced form of its header in
-`#packdiff-config`.
+The immutable build artifact — everything the CLI extracted from git. Written by `--dump-json`; the page embeds a reduced form of its header in `#packdiff-config`.
 
 ```json
 {
@@ -75,26 +59,16 @@ by `--dump-json`; the page embeds a reduced form of its header in
 
 Field notes:
 
-- `status` ∈ `Added | Deleted | Modified | Renamed`. For `added`,
-  `old_path` is `null`; for `deleted`, `new_path` is `null`; for `renamed`,
-  both are set and differ.
-- `notes` carries surfaced extended headers (currently mode changes, e.g.
-  `"old mode 100644"`).
-- Lines are single-key unions (`Add`/`Del`/`Ctx`/`Meta`). Line numbers are 1-based:
-  `old` counts in the pre-image, `new` in the post-image. `ctx` lines carry
-  both; `meta` lines carry neither.
+- `status` ∈ `Added | Deleted | Modified | Renamed`. For `added`, `old_path` is `null`; for `deleted`, `new_path` is `null`; for `renamed`, both are set and differ.
+- `notes` carries surfaced extended headers (currently mode changes, e.g. `"old mode 100644"`).
+- Lines are single-key unions (`Add`/`Del`/`Ctx`/`Meta`). Line numbers are 1-based: `old` counts in the pre-image, `new` in the post-image. `ctx` lines carry both; `meta` lines carry neither.
 - `binary: true` files have no hunks.
-- The **anchor path** of a file — the `file` string comments use — is
-  `new_path` when present, else `old_path`.
-- It is produced by `diff::parse_unified_diff`, a pure function over
-  `git diff --no-color --no-ext-diff --find-renames -U<N>` output.
+- The **anchor path** of a file — the `file` string comments use — is `new_path` when present, else `old_path`.
+- It is produced by `diff::parse_unified_diff`, a pure function over `git diff --no-color --no-ext-diff --find-renames -U<N>` output.
 
 ### `snapshots` — commit-boundary file contents
 
-Present when the range has two or more commits; powers the page's in-place
-commit-range filter. Contents are deduplicated by git blob id; a blob stored
-as `null` was not snapshotted (binary, not UTF-8, or over 2 MB) and renders
-as "contents not shown" in sub-range views.
+Present when the range has two or more commits; powers the page's in-place commit-range filter. Contents are deduplicated by git blob id; a blob stored as `null` was not snapshotted (binary, not UTF-8, or over 2 MB) and renders as "contents not shown" in sub-range views.
 
 ```json
 {
@@ -107,20 +81,12 @@ as "contents not shown" in sub-range views.
 }
 ```
 
-- `boundaries[0]` is the diff's start (the merge base); `boundaries[k]` for
-  `k > 0` is the state after the k-th commit. Only paths touched by some
-  commit in the range appear in `files`; a missing path does not exist at
-  that boundary.
-- `snapshot::range_diff(snapshots, from, to, context)` (WASM:
-  `pd_range_diff`) produces the `FileDiff` array between two boundaries via a
-  pure Myers line diff. Renames are not re-detected: within a sub-range a
-  rename is a delete plus an add.
+- `boundaries[0]` is the diff's start (the merge base); `boundaries[k]` for `k > 0` is the state after the k-th commit. Only paths touched by some commit in the range appear in `files`; a missing path does not exist at that boundary.
+- `snapshot::range_diff(snapshots, from, to, context)` (WASM: `pd_range_diff`) produces the `FileDiff` array between two boundaries via a pure Myers line diff. Renames are not re-detected: within a sub-range a rename is a delete plus an add.
 
 ## `ReviewDocument`
 
-The mutable review state. Lives in the browser's localStorage; every mutation
-goes through the model (via WASM in the browser). This is also the **Export
-JSON / Import JSON** format.
+The mutable review state. Lives in the browser's localStorage; every mutation goes through the model (via WASM in the browser). This is also the **Export JSON / Import JSON** format.
 
 ```json
 {
@@ -145,34 +111,22 @@ JSON / Import JSON** format.
 
 ### Identity and anchoring
 
-- **Comment identity** is `id` (any non-empty string; the page generates
-  time+random ids). Ids must be unique within a document — `upsert` replaces
-  on id match.
-- **Anchor identity** is `(file, side, line)`: `file` is the post-image path;
-  `side` is `"Old"` (a deleted line, `line` counts in the pre-image) or
-  `"New"` (an added or context line, `line` counts in the post-image).
-  Several comments may share one anchor.
+- **Comment identity** is `id` (any non-empty string; the page generates time+random ids). Ids must be unique within a document — `upsert` replaces on id match.
+- **Anchor identity** is `(file, side, line)`: `file` is the post-image path; `side` is `"Old"` (a deleted line, `line` counts in the pre-image) or `"New"` (an added or context line, `line` counts in the post-image). Several comments may share one anchor.
 
 ### Validation (applied on every entry into the document)
 
-`id`, `file`, `text`, `created_at`, `updated_at` non-empty; `line >= 1`.
-`ReviewDocument::parse` additionally rejects newer schemas and re-sorts, so
-untrusted input (imports, hand-edited stores) is normalized at the boundary.
+`id`, `file`, `text`, `created_at`, `updated_at` non-empty; `line >= 1`. `ReviewDocument::parse` additionally rejects newer schemas and re-sorts, so untrusted input (imports, hand-edited stores) is normalized at the boundary.
 
 ### Canonical order
 
-Comments always sort by `(file, line, side, created_at, id)` with `old`
-before `new` on the same line. Every operation restores this order.
+Comments always sort by `(file, line, side, created_at, id)` with `old` before `new` on the same line. Every operation restores this order.
 
 ### Merge semantics (`merge` — the Import JSON path)
 
 - Union by `id`.
-- On id collision the comment with the **later `updated_at`** wins (RFC 3339
-  UTC strings compare correctly as strings); an exact tie keeps the existing
-  comment.
-- The receiving document's metadata (`repo`, `base`, `head`) is kept —
-  importing never re-targets a store. This is what carries comments across
-  regenerated diffs: export from the old page, import into the new one.
+- On id collision the comment with the **later `updated_at`** wins (RFC 3339 UTC strings compare correctly as strings); an exact tie keeps the existing comment.
+- The receiving document's metadata (`repo`, `base`, `head`) is kept — importing never re-targets a store. This is what carries comments across regenerated diffs: export from the old page, import into the new one.
 
 ## Exports
 
@@ -188,7 +142,4 @@ before `new` on the same line. Every operation restores this order.
 packdiff:v1:<repo>:<base-sha-12>..<head-sha-12>
 ```
 
-Derived by `storage_key()` (exposed to the page as `pd_storage_key`). The key
-pins exact endpoint SHAs on purpose: line numbers only mean something against
-the diff they were written on. Regenerating the identical diff (any title or
-context) finds the same comments; any new commit yields a fresh, empty store.
+Derived by `storage_key()` (exposed to the page as `pd_storage_key`). The key pins exact endpoint SHAs on purpose: line numbers only mean something against the diff they were written on. Regenerating the identical diff (any title or context) finds the same comments; any new commit yields a fresh, empty store.
