@@ -3,7 +3,7 @@ resolver = "2"
 members = ["dto", "wasm", "cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Dmitry \"Dima\" Korolev <dmitry.korolev@gmail.com>"]
 license = "MIT"
@@ -20,8 +20,8 @@ thiserror = "2.0"
 # place. `path` is used inside the workspace; `version` is what a published
 # crate depends on (cargo strips the path when publishing). Bump this in
 # lockstep with `workspace.package.version` above (or let `cargo release` do
-# both) — see docs/publishing.md.
-packdiff-dto = { path = "dto", version = "0.1.0" }
+# both) — see PUBLISHING.md.
+packdiff-dto = { path = "dto", version = "0.1.1" }
 
 # Size-tuned release profile: the wasm module ships base64-inlined in every
 # generated HTML page, so every byte counts.

@@ -16,7 +16,7 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "packdiff"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "packdiff-dto",
  "serde_json",
@@ -25,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "packdiff-dto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "packdiff-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "packdiff-dto",
  "serde",
