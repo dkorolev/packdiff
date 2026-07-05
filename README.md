@@ -12,54 +12,27 @@ So this tool is mostly to make it more comfortable to review (and comment on!) a
 
 ---
 
-**Turn any two branches of a git repository into one self-contained HTML
-review page — with line comments that live in your browser and export as
-JSON, Markdown, or CSV.**
+**Turn any two branches of a git repository into one self-contained HTML review page — with line comments that live in your browser and export as JSON, Markdown, or CSV.**
 
 ```console
 $ packdiff main my-feature -C ~/src/myrepo -o review.html
 Wrote review.html (12 files, +345 −67, 5 commits)
 ```
 
-Open `review.html` anywhere — from disk (`file://`), over any static host, or
-mailed to a colleague. The page makes **zero network requests**: CSS, the
-diff, and the comment engine are all inside the one file.
+Open `review.html` anywhere — from disk (`file://`), over any static host, or mailed to a colleague. The page makes **zero network requests**: CSS, the diff, and the comment engine are all inside the one file.
 
-- **Click any diff line to comment** (Ctrl/Cmd+Enter saves; markdown
-  supported). Comments persist in the browser's localStorage, keyed to the
-  exact repo + commit SHAs.
-- **Markdown files render**: `.md` files in the diff get a *View rendered*
-  toggle switching between the diff text and the rendered markdown view, with
-  added lines tinted green and removed lines red.
-- **Filter by commits**: click a commit to see only its diff, click a second
-  to select the range between them (computed in-page by the WASM engine), and
-  copy any commit's full hash with one button.
-- **Navigate quickly**: a sticky nav with live counts (commits · files · LOC
-  delta) and a *Files changed* index that jumps straight to any file's diff.
-- **Unified or side-by-side**: a nav toggle switches the whole diff between
-  unified and split views (enabled once the window is wide enough for the font
-  size); commenting works on either.
-- **Export** the review as lossless JSON, Markdown grouped by file, or
-  RFC 4180 CSV — and **import** JSON back on another machine (merge by
-  comment id, newer edit wins).
-- **PR-style diffs by default**: `merge-base(BASE, HEAD)..HEAD`, so drift on
-  the base branch doesn't pollute the review (`--no-merge-base` for the
-  literal two-dot diff).
-- **Script- and agent-native**: piped stdout automatically switches to
-  machine mode — exactly one two-space JSON document per run, success and
-  failure alike, as single-key unions (`{ "Packed": { … } }`,
-  `{ "UnknownRef": { … } }`) — plus `--dump-json` for the full typed diff
-  document and a documented exit-code table (`packdiff help exitcodes`).
+- **Click any diff line to comment** (Ctrl/Cmd+Enter saves; markdown supported). Comments persist in the browser's localStorage, keyed to the exact repo + commit SHAs.
+- **Markdown files render**: `.md` files in the diff get a *View rendered* toggle switching between the diff text and the rendered markdown view, with added lines tinted green and removed lines red.
+- **Filter by commits**: click a commit to see only its diff, click a second to select the range between them (computed in-page by the WASM engine), and copy any commit's full hash with one button.
+- **Navigate quickly**: a sticky nav with live counts (commits · files · LOC delta) and a *Files changed* index that jumps straight to any file's diff.
+- **Unified or side-by-side**: a nav toggle switches the whole diff between unified and split views (enabled once the window is wide enough for the font size); commenting works on either.
+- **Export** the review as lossless JSON, Markdown grouped by file, or RFC 4180 CSV — and **import** JSON back on another machine (merge by comment id, newer edit wins).
+- **PR-style diffs by default**: `merge-base(BASE, HEAD)..HEAD`, so drift on the base branch doesn't pollute the review (`--no-merge-base` for the literal two-dot diff).
+- **Script- and agent-native**: piped stdout automatically switches to machine mode — exactly one two-space JSON document per run, success and failure alike, as single-key unions (`{ "Packed": { … } }`, `{ "UnknownRef": { … } }`) — plus `--dump-json` for the full typed diff document and a documented exit-code table (`packdiff help exitcodes`).
 
 ## How it works
 
-The interesting part of the design: the **data model is one Rust crate,
-compiled twice**. The CLI links it natively to parse git output; every
-generated page carries it compiled to WebAssembly (~124 KB, base64-inlined,
-no wasm-bindgen, empty import object) as the in-browser comment engine. The
-page's JavaScript is a view layer only — validation, ordering, merge
-semantics, and export formats are defined once, in Rust, and run identically
-in tests, in the CLI, and in your browser.
+The interesting part of the design: the **data model is one Rust crate, compiled twice**. The CLI links it natively to parse git output; every generated page carries it compiled to WebAssembly (~124 KB, base64-inlined, no wasm-bindgen, empty import object) as the in-browser comment engine. The page's JavaScript is a view layer only — validation, ordering, merge semantics, and export formats are defined once, in Rust, and run identically in tests, in the CLI, and in your browser.
 
 ```
 packdiff/
@@ -101,10 +74,7 @@ $ cargo build --release            # builds the wasm module too (cli/build.rs)
 $ cargo install --path cli         # puts `packdiff` on your PATH
 ```
 
-To publish to crates.io (maintainer note; order matters — the CLI's build
-script pulls the wasm engine from the registry). The full playbook, including
-how the shared version is kept in one place, is in
-[docs/publishing.md](docs/publishing.md):
+To publish to crates.io (maintainer note; order matters — the CLI's build script pulls the wasm engine from the registry). The full playbook, including how the shared version is kept in one place, is in [docs/publishing.md](docs/publishing.md):
 
 ```console
 $ cargo publish -p packdiff-dto
@@ -128,9 +98,7 @@ packdiff <BASE>...<HEAD> [OPTIONS]     merge-base diff (the default semantics)
 packdiff <BASE>..<HEAD> [OPTIONS]      literal two-dot diff
 ```
 
-`HEAD` defaults to whatever is checked out, so the everyday form is just
-`packdiff main`. Git-style ranges work the way you expect: `..` means the
-literal diff, `...` the merge-base diff.
+`HEAD` defaults to whatever is checked out, so the everyday form is just `packdiff main`. Git-style ranges work the way you expect: `..` means the literal diff, `...` the merge-base diff.
 
 | Option | Meaning | Default |
 | --- | --- | --- |
@@ -145,13 +113,9 @@ literal diff, `...` the merge-base diff.
 | `--color MODE` | `auto` \| `always` \| `never` (`NO_COLOR` honored) | `auto` |
 | `--verbose` | Echo git invocations and timing to stderr | off |
 
-Humans at a terminal may use relaxed spellings (`--no-color`, bare
-`version`); the CLI resolves them and nudges toward the canonical form.
-Scripts must use canonical syntax — machine mode refuses aliases.
+Humans at a terminal may use relaxed spellings (`--no-color`, bare `version`); the CLI resolves them and nudges toward the canonical form. Scripts must use canonical syntax — machine mode refuses aliases.
 
-Exit codes: `0` success · `2` usage · `3` not a git repository · `4` unknown
-ref · `5` git/io failure · `130` interrupted — `packdiff help exitcodes` has
-the full table, and every machine-mode error carries a `stage` field.
+Exit codes: `0` success · `2` usage · `3` not a git repository · `4` unknown ref · `5` git/io failure · `130` interrupted — `packdiff help exitcodes` has the full table, and every machine-mode error carries a `stage` field.
 
 ## Documentation
 
@@ -172,22 +136,13 @@ Rust API docs: `cargo doc -p packdiff-dto --open`.
 $ ./test.sh
 ```
 
-Runs `cargo fmt --check`, the dto unit tests, the CLI integration tests
-(driving the real binary against a scratch git repository, including the
-machine-mode contract), release-mode tests, and the Node tests exercising the
-actual compiled wasm module under the page's exact calling convention. A
-clean checkout stays green — tests missing a prerequisite skip with a hint.
+Runs `cargo fmt --check`, the dto unit tests, the CLI integration tests (driving the real binary against a scratch git repository, including the machine-mode contract), release-mode tests, and the Node tests exercising the actual compiled wasm module under the page's exact calling convention. A clean checkout stays green — tests missing a prerequisite skip with a hint.
 
-The same pass gates pushes (`git config core.hooksPath .githooks` enables the
-pre-push hook) and merges (GitHub Actions CI) — see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+The same pass gates pushes (`git config core.hooksPath .githooks` enables the pre-push hook) and merges (GitHub Actions CI) — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Limitations (v0.1)
 
-No syntax or word-level highlighting; the side-by-side view needs a
-wide-enough window; comments carry across regenerated diffs via
-export → import rather than automatically; localStorage is
-per-browser-profile by nature.
+No syntax or word-level highlighting; the side-by-side view needs a wide-enough window; comments carry across regenerated diffs via export → import rather than automatically; localStorage is per-browser-profile by nature.
 
 ## License
 
