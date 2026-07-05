@@ -194,7 +194,9 @@ fn render_file(index: usize, f: &FileDiff) -> String {
                 ));
       }
     }
-    let table = format!(r#"<table class="diff">{rows}</table>"#);
+    // Wrapped so the page JS can build a side-by-side `table.diff.split`
+    // sibling and swap which one shows; the markdown toggle hides the wrap.
+    let table = format!(r#"<div class="diff-wrap"><table class="diff unified">{rows}</table></div>"#);
     if renderable_markdown {
       format!("{table}{}", render_markdown_preview(f))
     } else {
@@ -259,6 +261,8 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <a href="#commits">Commits <span class="count" id="nav-commits">{ncommits}</span></a>
 <a href="#files">Files changed <span class="count" id="nav-files">{nfiles}</span></a>
 <a href="#diff">Diff <span class="count" id="nav-diff"><span class="adds">+{adds}</span> <span class="dels">−{dels}</span></span></a>
+<span class="nav-spacer"></span>
+<button id="view-toggle" type="button" disabled>Side-by-side</button>
 </nav>
 "##,
         title = esc(&page_title),
@@ -396,6 +400,15 @@ tr.del td { background:var(--del-bg); }
 tr.hunk td, tr.meta-line td { background:var(--panel); color:var(--muted); padding:2px 8px; }
 tr.commentable td.code { cursor:pointer; }
 tr.commentable:hover td.code { outline:1px dashed var(--accent); outline-offset:-1px; }
+/* side-by-side: four columns (old ln, old code, new ln, new code) */
+table.diff.split { table-layout:fixed; }
+table.diff.split td.code { width:calc(50% - 40px); }
+table.diff.split td:nth-child(2) { border-right:1px solid var(--border); }
+table.diff.split td.code.add, table.diff.split td.ln.add { background:var(--add-bg); }
+table.diff.split td.code.del, table.diff.split td.ln.del { background:var(--del-bg); }
+table.diff.split td.empty { background:var(--panel); }
+table.diff.split td.code.commentable { cursor:pointer; }
+table.diff.split td.code.commentable:hover { outline:1px dashed var(--accent); outline-offset:-1px; }
 tr.comment-row td, tr.editor-row td { background:var(--comment-bg);
   border-left:3px solid var(--comment-border); padding:8px 12px;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; font-size:13px; }
@@ -520,11 +533,21 @@ const JS: &str = r##"
   }
 
   // ---- anchoring ----
+  // A comment anchors to (file, side, line). In the unified view the anchor
+  // lives on a whole `tr.commentable`; in the side-by-side view it lives on a
+  // single `td.code.commentable` half-cell. rowFor resolves either to the
+  // <tr> the comment card is inserted after, targeting whichever view is live.
   function cssAttr(v) { return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
-  function rowFor(c) {
-    const sel = 'tr.commentable[data-file="' + cssAttr(c.file) + '"]' +
+  function anchorSel(prefix, c) {
+    return prefix + '[data-file="' + cssAttr(c.file) + '"]' +
       '[data-side="' + cssAttr(c.side) + '"][data-line="' + cssAttr(String(c.line)) + '"]';
-    return document.querySelector(sel);
+  }
+  function rowFor(c) {
+    if (document.body.classList.contains('view-split')) {
+      const cell = document.querySelector(anchorSel('td.code.commentable', c));
+      return cell ? cell.parentElement : null;
+    }
+    return document.querySelector(anchorSel('tr.commentable', c));
   }
 
   // ---- rendering ----
@@ -563,7 +586,7 @@ const JS: &str = r##"
     edit.textContent = 'Edit';
     edit.addEventListener('click', () => {
       const row = rowFor(c);
-      if (row) openEditor(row, c);
+      if (row) openEditor(row, { file: c.file, side: c.side, line: c.line }, c);
     });
     const del = document.createElement('button');
     del.textContent = 'Delete';
@@ -582,7 +605,8 @@ const JS: &str = r##"
     const tr = document.createElement('tr');
     tr.className = 'comment-row';
     const td = document.createElement('td');
-    td.colSpan = 3;
+    // Span the anchor row's own column count (3 unified, 4 side-by-side).
+    td.colSpan = row.cells ? row.cells.length : 3;
     td.appendChild(commentCard(c));
     tr.appendChild(td);
     let after = row;
@@ -597,14 +621,17 @@ const JS: &str = r##"
   function closeEditors() {
     document.querySelectorAll('tr.editor-row').forEach((el) => el.remove());
   }
-  function openEditor(row, existing) {
+  // openEditor(afterRow, anchor, existing): `anchor` is { file, side, line }
+  // resolved from whichever view was clicked, so a new comment carries the
+  // right coordinates regardless of unified vs side-by-side.
+  function openEditor(afterRow, anchor, existing) {
     closeEditors();
     const tr = document.createElement('tr');
     tr.className = 'editor-row';
     const td = document.createElement('td');
-    td.colSpan = 3;
+    td.colSpan = afterRow.cells ? afterRow.cells.length : 3;
     const ta = document.createElement('textarea');
-    ta.placeholder = 'Leave a comment… (Ctrl/Cmd+Enter to save)';
+    ta.placeholder = 'Leave a comment… (markdown supported, Ctrl/Cmd+Enter to save)';
     if (existing) ta.value = existing.text;
     const save = document.createElement('button');
     save.textContent = 'Save';
@@ -616,8 +643,8 @@ const JS: &str = r##"
       const now = new Date().toISOString();
       const comment = existing
         ? Object.assign({}, existing, { text: text, updated_at: now })
-        : { id: genId(), file: row.dataset.file, side: row.dataset.side,
-            line: Number(row.dataset.line), text: text,
+        : { id: genId(), file: anchor.file, side: anchor.side,
+            line: Number(anchor.line), text: text,
             created_at: now, updated_at: now };
       closeEditors();
       try {
@@ -636,16 +663,29 @@ const JS: &str = r##"
     td.appendChild(save);
     td.appendChild(cancel);
     tr.appendChild(td);
-    row.after(tr);
+    afterRow.after(tr);
     ta.focus();
+  }
+
+  // The anchor may sit on the clicked cell (side-by-side) or on its row
+  // (unified). Returns { file, side, line } or null for a non-commentable spot.
+  function anchorOf(cell) {
+    if (cell.dataset.file) {
+      return { file: cell.dataset.file, side: cell.dataset.side, line: cell.dataset.line };
+    }
+    const row = cell.parentElement;
+    if (row.classList.contains('commentable')) {
+      return { file: row.dataset.file, side: row.dataset.side, line: row.dataset.line };
+    }
+    return null;
   }
 
   document.addEventListener('click', (ev) => {
     const cell = ev.target.closest('td.code');
     if (!cell) return;
-    const row = cell.parentElement;
-    if (!row.classList.contains('commentable')) return;
-    openEditor(row, null);
+    const anchor = anchorOf(cell);
+    if (!anchor) return;
+    openEditor(cell.parentElement, anchor, null);
   });
 
   // ---- rendered-markdown toggle for .md files (pure view state) ----
@@ -654,12 +694,12 @@ const JS: &str = r##"
     if (!btn) return;
     ev.preventDefault(); // the button lives inside <summary>: do not fold the panel
     const file = btn.closest('details.file');
-    const table = file.querySelector('table.diff');
+    const wrap = file.querySelector('.diff-wrap');
     const preview = file.querySelector('.md-preview');
-    if (!table || !preview) return;
+    if (!wrap || !preview) return;
     const showRendered = preview.hidden;
     preview.hidden = !showRendered;
-    table.style.display = showRendered ? 'none' : '';
+    wrap.hidden = showRendered;
     btn.textContent = showRendered ? 'View diff' : 'View rendered';
   });
 
@@ -774,6 +814,9 @@ const JS: &str = r##"
     fullList.style.display = 'none';
     rangedFiles.hidden = false;
     rangedList.hidden = false;
+    // Freshly built range panels are unified; re-apply the diff view so they
+    // pick up side-by-side when it is active.
+    if (document.body.classList.contains('view-split')) applyDiffView();
   }
 
   // One row of the range-mode file index, linking to the range file panel.
@@ -851,8 +894,13 @@ const JS: &str = r##"
       details.appendChild(p);
       return details;
     }
+    // Wrapped and classed exactly like the build-time unified tables so the
+    // side-by-side builder handles range panels identically (no anchors —
+    // range diffs stay read-only).
+    const wrap = document.createElement('div');
+    wrap.className = 'diff-wrap';
     const table = document.createElement('table');
-    table.className = 'diff';
+    table.className = 'diff unified';
     const cell = (cls, text) => {
       const td = document.createElement('td');
       if (cls) td.className = cls;
@@ -885,7 +933,8 @@ const JS: &str = r##"
         table.appendChild(tr);
       }
     }
-    details.appendChild(table);
+    wrap.appendChild(table);
+    details.appendChild(wrap);
     return details;
   }
 
@@ -951,6 +1000,150 @@ const JS: &str = r##"
     };
     reader.readAsText(file);
   });
+
+  // ---- side-by-side (split) diff view ----
+  // The unified tables are the source of truth; a `table.diff.split` sibling
+  // is built lazily from each and the two are swapped by a body class. The
+  // build reads the unified rows, so it works the same for build-time panels
+  // and JS-built range panels, inheriting commentability where it exists.
+  const SPLIT_MIN_EM = 90; // side-by-side needs this many em of width to read
+
+  function splitLnCell(no, kind) {
+    const td = document.createElement('td');
+    td.className = 'ln' + (kind ? ' ' + kind : '');
+    td.textContent = no;
+    return td;
+  }
+  function splitCodeCell(text, kind, anchor) {
+    const td = document.createElement('td');
+    td.className = 'code' + (kind ? ' ' + kind : '');
+    if (anchor) {
+      td.classList.add('commentable');
+      td.dataset.file = anchor.file;
+      td.dataset.side = anchor.side;
+      td.dataset.line = anchor.line;
+    }
+    td.textContent = text;
+    return td;
+  }
+  function splitEmpty(tr) {
+    const ln = document.createElement('td');
+    ln.className = 'ln empty';
+    const code = document.createElement('td');
+    code.className = 'code empty';
+    tr.appendChild(ln);
+    tr.appendChild(code);
+  }
+  // Read a unified code row into { no, text, anchor } for the given side.
+  function unifiedCell(row, side) {
+    const isOld = side === 'Old';
+    const no = (isOld ? row.cells[0] : row.cells[1]).textContent;
+    const text = row.cells[2].textContent.slice(1); // drop the +/-/space sign
+    const anchor = (row.classList.contains('commentable') && row.dataset.side === side)
+      ? { file: row.dataset.file, side: side, line: row.dataset.line } : null;
+    return { no: no, text: text, anchor: anchor };
+  }
+
+  function buildSplit(unified) {
+    const split = document.createElement('table');
+    split.className = 'diff split';
+    let dels = [], adds = [];
+    function flush() {
+      const n = Math.max(dels.length, adds.length);
+      for (let i = 0; i < n; i++) {
+        const tr = document.createElement('tr');
+        if (dels[i]) {
+          const d = unifiedCell(dels[i], 'Old');
+          tr.appendChild(splitLnCell(d.no, 'del'));
+          tr.appendChild(splitCodeCell(d.text, 'del', d.anchor));
+        } else { splitEmpty(tr); }
+        if (adds[i]) {
+          const a = unifiedCell(adds[i], 'New');
+          tr.appendChild(splitLnCell(a.no, 'add'));
+          tr.appendChild(splitCodeCell(a.text, 'add', a.anchor));
+        } else { splitEmpty(tr); }
+        split.appendChild(tr);
+      }
+      dels = []; adds = [];
+    }
+    for (const row of unified.rows) {
+      if (row.classList.contains('comment-row') || row.classList.contains('editor-row')) continue;
+      if (row.classList.contains('hunk') || row.classList.contains('meta-line')) {
+        flush();
+        const tr = document.createElement('tr');
+        tr.className = row.className;
+        const td = document.createElement('td');
+        td.colSpan = 4;
+        td.textContent = row.cells[row.cells.length - 1].textContent;
+        tr.appendChild(td);
+        split.appendChild(tr);
+      } else if (row.classList.contains('ctx')) {
+        flush();
+        const c = unifiedCell(row, 'New');
+        const oldNo = row.cells[0].textContent;
+        const tr = document.createElement('tr');
+        tr.appendChild(splitLnCell(oldNo, ''));      // left: old number, non-commentable
+        tr.appendChild(splitCodeCell(c.text, '', null));
+        tr.appendChild(splitLnCell(c.no, ''));       // right: new number, carries the anchor
+        tr.appendChild(splitCodeCell(c.text, '', c.anchor));
+        split.appendChild(tr);
+      } else if (row.classList.contains('del')) {
+        dels.push(row);
+      } else if (row.classList.contains('add')) {
+        adds.push(row);
+      }
+    }
+    flush();
+    return split;
+  }
+
+  function ensureSplitBuilt() {
+    document.querySelectorAll('table.diff.unified').forEach((u) => {
+      const wrap = u.parentElement;
+      if (!wrap.querySelector('table.diff.split')) wrap.appendChild(buildSplit(u));
+    });
+  }
+  function applyDiffView() {
+    const split = document.body.classList.contains('view-split');
+    if (split) ensureSplitBuilt();
+    document.querySelectorAll('.diff-wrap').forEach((w) => {
+      const u = w.querySelector('table.diff.unified');
+      const s = w.querySelector('table.diff.split');
+      if (u) u.style.display = split ? 'none' : '';
+      if (s) s.style.display = split ? '' : 'none';
+    });
+    closeEditors();
+    renderAll(); // re-home comment rows into the now-visible tables
+  }
+
+  const viewToggle = document.getElementById('view-toggle');
+  function splitFits() {
+    const fs = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    return window.innerWidth >= SPLIT_MIN_EM * fs;
+  }
+  function refreshToggle() {
+    if (!viewToggle) return;
+    const fits = splitFits();
+    viewToggle.disabled = !fits;
+    viewToggle.title = fits
+      ? 'Switch between unified and side-by-side diff'
+      : 'Window too narrow for side-by-side — widen it (or reduce the font size)';
+    if (!fits && document.body.classList.contains('view-split')) {
+      document.body.classList.remove('view-split');
+      viewToggle.textContent = 'Side-by-side';
+      applyDiffView();
+    }
+  }
+  if (viewToggle) {
+    viewToggle.addEventListener('click', () => {
+      const nowSplit = !document.body.classList.contains('view-split');
+      document.body.classList.toggle('view-split', nowSplit);
+      viewToggle.textContent = nowSplit ? 'Unified' : 'Side-by-side';
+      applyDiffView();
+    });
+    window.addEventListener('resize', refreshToggle);
+    refreshToggle();
+  }
 
   // ---- nav scrollspy: highlight the section currently under the nav bar ----
   (function () {

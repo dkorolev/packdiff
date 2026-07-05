@@ -154,6 +154,10 @@ fn end_to_end() {
   assert_eq!(html.matches(r#"class="filelist""#).count(), 1);
   assert_eq!(html.matches("href=\"#file-").count(), 5);
   assert_eq!(html.matches("<details class=\"file\" id=\"file-").count(), 5);
+  // Side-by-side: a view toggle in the nav (disabled until the JS enables it
+  // on a wide-enough window) and every diff table wrapped for a split sibling.
+  assert!(html.contains(r#"<button id="view-toggle" type="button" disabled>"#));
+  assert_eq!(html.matches(r#"<table class="diff unified">"#).count(), html.matches(r#"class="diff-wrap""#).count());
 
   // The dumped DiffDocument parses back through the dto schema, with
   // single-key line unions.
