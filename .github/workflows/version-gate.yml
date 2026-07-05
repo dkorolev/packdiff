@@ -1,0 +1,19 @@
+name: version-gate
+
+# The release ladder, enforced before merge (see PUBLISHING.md): the version
+# being merged is exactly one above what crates.io serves, and crates.io
+# serves exactly what the base branch holds. While nothing is published yet,
+# the gate compares against the base branch instead and warns.
+on:
+  pull_request:
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version ladder (PR == published + 1, published == base branch)
+        env:
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 .github/version-gate.py
