@@ -376,7 +376,7 @@ fn machine_mode_streams_progress_on_stderr() {
     .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("non-JSON stderr line {l:?}: {e}")))
     .collect();
   assert!(!reports.is_empty(), "no progress lines at all");
-  let mut prev_done = 0;
+  let mut prev_percent = 0;
   for r in &reports {
     let obj = r.as_object().expect("progress line is an object");
     assert_eq!(obj.keys().collect::<Vec<_>>(), ["Progress"], "single-key union document");
@@ -384,16 +384,20 @@ fn machine_mode_streams_progress_on_stderr() {
     assert!(p["stage"].is_string() && p["elapsed_ms"].is_u64(), "{p}");
     let (done, total) = (p["done"].as_u64().unwrap(), p["total"].as_u64().unwrap());
     assert!(done <= total, "done exceeds total: {p}");
-    assert!(done >= prev_done, "done went backwards: {p}");
-    prev_done = done;
+    // `done/total` are per-stage; `percent` is the whole-run number and is
+    // guaranteed monotonic — the "never jumps backwards" contract.
+    let percent = p["percent"].as_u64().unwrap();
+    assert!(percent <= 100, "{p}");
+    assert!(percent >= prev_percent, "percent went backwards: {p}");
+    prev_percent = percent;
   }
   let stages: Vec<&str> = reports.iter().map(|r| r["Progress"]["stage"].as_str().unwrap()).collect();
-  for stage in ["Resolve", "MergeBase", "Diff", "Commits", "Snapshots", "Render", "Write", "Done"] {
+  for stage in ["Resolve", "MergeBase", "Diff", "Commits", "Scan", "Snapshots", "Render", "Write", "Done"] {
     assert!(stages.contains(&stage), "stage {stage} never reported: {stages:?}");
   }
   let last = &reports.last().unwrap()["Progress"];
   assert_eq!(last["stage"], "Done", "the stream ends with Done");
-  assert_eq!(last["done"], last["total"], "Done reports full completion");
+  assert_eq!(last["percent"], 100, "Done reports full completion");
 
   // stdout stays exactly one `Packed` document — progress never leaks there.
   let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();

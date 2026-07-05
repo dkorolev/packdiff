@@ -106,10 +106,10 @@ Every run reports live progress **on stderr** (stdout stays reserved for data), 
 - **In machine mode** (`--json` or piped stdout): one single-key `{ "Progress": { ... } }` JSON document per line — emitted immediately at every stage change and at least once per second in between — so a harness always knows the stage, the counts, and the ETA:
 
 ```json
-{ "Progress": { "stage": "Snapshots", "detail": "blob 439f6df7", "done": 36, "total": 50, "elapsed_ms": 2010, "eta_ms": 781 } }
+{ "Progress": { "stage": "Snapshots", "detail": "blob 439f6df7", "done": 36, "total": 50, "percent": 76, "elapsed_ms": 2010, "eta_ms": 627 } }
 ```
 
-Fields: `stage` ∈ `Resolve | MergeBase | Diff | Commits | Snapshots | Render | Write | Done`; `detail` is the current work item (absent between items); `done`/`total` are work units, where `total` grows as snapshot work is discovered and never shrinks; `elapsed_ms` counts from run start; `eta_ms` is the linear extrapolation (absent until at least one unit is done). The stream ends with a `Done` report where `done == total` — a failed run never reports `Done`, so its absence plus the exit code is a reliable failure signal.
+Fields: `stage` ∈ `Resolve | MergeBase | Diff | Commits | Scan | Snapshots | Render | Write | Done` (`Scan` and `Snapshots` appear only for ranges of two or more commits); `detail` is the current work item (absent between items); `done`/`total` count work items **within the current stage**, and every stage enters with its full total already known; `percent` is the whole-run completion `0..=100` — stage spans weighted by typical cost, interpolated within the stage, and **guaranteed monotonic** (it never decreases across a run, so bars driven from it never jump backwards); `elapsed_ms` counts from run start; `eta_ms` extrapolates linearly from the weighted completion (absent until there is progress to extrapolate from). The stream ends with a `Done` report at `percent == 100` — a failed run never reports `Done`, so its absence plus the exit code is a reliable failure signal.
 
 Separately, every git invocation runs under a watchdog: after 10 seconds of runtime a status line goes to stderr every ~10 s (`packdiff: \`git diff ...\` still running (20s elapsed)`), and a process that produces NO output for 5 minutes is killed with a `GitError` explaining that silence.
 

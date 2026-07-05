@@ -324,48 +324,51 @@ fn collect_snapshots(
   }
   let mut boundary_shas = vec![merge_base.to_string()];
   boundary_shas.extend(commits.iter().map(|c| c.sha.clone()));
-  // Known up front: one changed-paths scan per adjacent pair, one tree
-  // listing per boundary. Blob fetches are added as they are discovered.
-  progress.add_work((boundary_shas.len() - 1 + boundary_shas.len()) as u64);
+  // Both stages enter with their FULL item count known — one changed-paths
+  // scan per adjacent pair plus one tree listing per boundary, then one
+  // fetch per unique blob (countable once the listings exist) — so progress
+  // moves linearly through each instead of chasing a growing total.
+  progress.stage(Stage::Scan, (boundary_shas.len() - 1 + boundary_shas.len()) as u64);
   let mut tracked: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
   for pair in boundary_shas.windows(2) {
     tracked.extend(git::changed_paths(repo, &pair[0], &pair[1])?);
     progress.step(&format!("changes {}..{}", &pair[0][..7], &pair[1][..7]));
   }
   let paths: Vec<String> = tracked.into_iter().collect();
-  let mut blobs = std::collections::BTreeMap::new();
   let mut boundaries = Vec::with_capacity(boundary_shas.len());
   for sha in &boundary_shas {
     let files = git::tree_blobs(repo, sha, &paths)?;
     progress.step(&format!("boundary {}", &sha[..7]));
-    for id in files.values() {
-      if !blobs.contains_key(id) {
-        progress.add_work(1);
-        blobs.insert(id.clone(), git::blob_text(repo, id, MAX_SNAPSHOT_BLOB_BYTES)?);
-        progress.step(&format!("blob {}", &id[..id.len().min(8)]));
-      }
-    }
     boundaries.push(Boundary { sha: sha.clone(), files });
+  }
+  let ids: std::collections::BTreeSet<&String> = boundaries.iter().flat_map(|b| b.files.values()).collect();
+  progress.stage(Stage::Snapshots, ids.len() as u64);
+  let mut blobs = std::collections::BTreeMap::new();
+  for id in ids {
+    blobs.insert(id.clone(), git::blob_text(repo, id, MAX_SNAPSHOT_BLOB_BYTES)?);
+    progress.step(&format!("blob {}", &id[..id.len().min(8)]));
   }
   Ok(Some(RangeSnapshots { blobs, boundaries }))
 }
 
 fn collect(args: &Args, progress: &Progress) -> Result<DiffDocument, CliError> {
-  progress.stage(Stage::Resolve);
+  progress.stage(Stage::Resolve, 2);
   let base_sha = git::resolve_ref(&args.repo, &args.base)?;
   progress.step(&args.base);
   let head_sha = git::resolve_ref(&args.repo, &args.head)?;
   progress.step(&args.head);
-  progress.stage(Stage::MergeBase);
+  progress.stage(Stage::MergeBase, 1);
   let lo = if args.merge_base { git::merge_base(&args.repo, &base_sha, &head_sha)? } else { base_sha.clone() };
   progress.step("");
-  progress.stage(Stage::Diff);
+  progress.stage(Stage::Diff, 1);
   let files = parse_unified_diff(&git::diff_text(&args.repo, &lo, &head_sha, args.context)?);
   progress.step("");
-  progress.stage(Stage::Commits);
+  progress.stage(Stage::Commits, 1);
   let commits = git::commits(&args.repo, &lo, &head_sha)?;
   progress.step("");
-  progress.stage(Stage::Snapshots);
+  // collect_snapshots drives the Scan and Snapshots stages itself: each is
+  // entered with its full item count already known. A range of fewer than
+  // two commits skips both stages entirely (nothing to filter).
   let snapshots = collect_snapshots(&args.repo, &lo, &commits, progress)?;
   Ok(DiffDocument::new(
     git::repo_name(&args.repo)?,
@@ -390,11 +393,11 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
   // `Done` — only the success path ends the stream with `Done`.
   let progress = Progress::new(machine);
   let doc = collect(args, &progress)?;
-  progress.stage(Stage::Render);
+  progress.stage(Stage::Render, 1);
   let page = render::render_page(&doc, args.title.as_deref(), WASM);
   progress.step("");
 
-  progress.stage(Stage::Write);
+  progress.stage(Stage::Write, 1);
   let out_path = match args.out.as_deref() {
     Some("-") => {
       write_stdout(page.as_bytes())?;

@@ -2,19 +2,21 @@
 //! by the CLI's machine flag:
 //!
 //! - **Human** (terminal): an `indicatif` bar on stderr showing the stage,
-//!   work counts, and the estimated time remaining. indicatif hides itself
+//!   a percentage, and the estimated time remaining. indicatif hides itself
 //!   when stderr is not a terminal, so redirected runs stay clean.
 //! - **Machine**: one `{ "Progress": { ... } }` JSON document per line on
 //!   stderr — immediately at every stage change and at least once per second
-//!   in between — so a harness always knows the stage, the counts, and the
-//!   ETA without parsing free text.
+//!   in between — so a harness always knows the stage, the counts, the
+//!   percentage, and the ETA without parsing free text.
 //!
 //! Progress is liveness output (see the CLI contract): it goes to stderr
 //! ONLY, never stdout, and disappears entirely on completion in human mode.
 //!
-//! Work accounting: the run starts with one unit per fixed stage step and
-//! grows the total as snapshot work (boundaries, blobs) is discovered, so
-//! `done/total` and the ETA stay honest rather than jumping backwards.
+//! Linearity: each stage owns a fixed span of the whole bar, weighted by its
+//! typical share of the wall time (snapshotting dominates), and the position
+//! interpolates through the span by items done within the stage. The
+//! position is additionally clamped monotonic — discovering more work can
+//! slow the bar down, but never moves it backwards.
 
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -36,16 +38,24 @@ pub enum Stage {
   Diff,
   /// Listing the commits in the diffed range.
   Commits,
-  /// Snapshotting file contents at every commit boundary — the dominant
-  /// cost; its work items (boundaries, blobs) are discovered incrementally.
+  /// Scanning the range for snapshot inputs: changed paths per commit pair
+  /// and the tree listing at every boundary. Its item count is known at
+  /// stage entry, so progress through it is linear.
+  Scan,
+  /// Fetching the snapshotted file contents (one git call per unique blob)
+  /// — the dominant cost. The blob count is known before the first fetch,
+  /// so progress through it is linear too.
   Snapshots,
   /// Assembling the HTML page.
   Render,
   /// Writing the output.
   Write,
-  /// The run finished; `done == total`. Always the final report.
+  /// The run finished; `percent == 100`. Always the final report.
   Done,
 }
+
+/// The scale positions and spans are measured in (per-mille of the run).
+const SCALE: u64 = 1000;
 
 impl Stage {
   /// Short human label for the bar's message area.
@@ -55,10 +65,29 @@ impl Stage {
       Stage::MergeBase => "merge base",
       Stage::Diff => "diffing",
       Stage::Commits => "listing commits",
+      Stage::Scan => "scanning boundaries",
       Stage::Snapshots => "snapshotting",
       Stage::Render => "rendering",
       Stage::Write => "writing",
       Stage::Done => "done",
+    }
+  }
+
+  /// The stage's `[start, end)` span on the 0..=[`SCALE`] bar, weighted by
+  /// its typical share of the wall time. Every scan and blob item is one
+  /// git call of comparable cost, and blobs typically outnumber scans
+  /// roughly 3:1, which sets the `Scan`/`Snapshots` split.
+  fn span(self) -> (u64, u64) {
+    match self {
+      Stage::Resolve => (0, 20),
+      Stage::MergeBase => (20, 30),
+      Stage::Diff => (30, 70),
+      Stage::Commits => (70, 90),
+      Stage::Scan => (90, 280),
+      Stage::Snapshots => (280, 950),
+      Stage::Render => (950, 985),
+      Stage::Write => (985, SCALE),
+      Stage::Done => (SCALE, SCALE),
     }
   }
 }
@@ -74,49 +103,64 @@ pub struct ProgressReport {
   /// between items.
   #[serde(skip_serializing_if = "Option::is_none")]
   pub detail: Option<String>,
-  /// Work items completed so far across the whole run.
+  /// Work items completed within the current stage.
   pub done: u64,
-  /// Total work items known so far; grows as snapshot work is discovered,
-  /// and never shrinks.
+  /// Work items in the current stage; every stage enters with its full
+  /// total already known, so this is stable within a stage.
   pub total: u64,
+  /// Whole-run completion, `0..=100`: stage spans weighted by typical cost,
+  /// interpolated by `done/total` within the stage, and clamped monotonic —
+  /// it never decreases across a run.
+  pub percent: u64,
   /// Milliseconds since the run started.
   pub elapsed_ms: u64,
-  /// Estimated milliseconds remaining, linearly extrapolated from work done
-  /// so far; absent until at least one work item has completed.
+  /// Estimated milliseconds remaining, extrapolated linearly from the
+  /// weighted completion so far; absent until there is progress to
+  /// extrapolate from.
   #[serde(skip_serializing_if = "Option::is_none")]
   pub eta_ms: Option<u64>,
 }
 
-/// `elapsed × remaining ÷ done`, the linear ETA; `None` before any work is
-/// done (no basis for extrapolation).
-fn eta_ms(elapsed_ms: u64, done: u64, total: u64) -> Option<u64> {
-  if done == 0 {
+/// `elapsed × remaining ÷ done` over the weighted position; `None` at
+/// position zero (no basis for extrapolation).
+fn eta_ms(elapsed_ms: u64, position: u64) -> Option<u64> {
+  if position == 0 {
     return None;
   }
-  Some(elapsed_ms.saturating_mul(total.saturating_sub(done)) / done)
+  Some(elapsed_ms.saturating_mul(SCALE - position.min(SCALE)) / position)
 }
-
-/// Fixed work units before snapshot discovery: two ref resolutions, merge
-/// base, diff, commit list, render, write.
-const BASE_UNITS: u64 = 7;
 
 struct State {
   stage: Stage,
   detail: Option<String>,
-  done: u64,
-  total: u64,
+  /// Items done / known within the current stage only.
+  stage_done: u64,
+  stage_total: u64,
+  /// High-water mark of the weighted position: the monotonic clamp.
+  position: u64,
 }
 
 impl State {
+  /// Recompute the weighted position from the current stage and its item
+  /// counts, ratcheting the monotonic high-water mark.
+  fn advance(&mut self) -> u64 {
+    let (start, end) = self.stage.span();
+    let within =
+      if self.stage_total == 0 { 0 } else { (end - start).saturating_mul(self.stage_done) / self.stage_total };
+    self.position = self.position.max(start + within.min(end - start));
+    self.position
+  }
+
   fn report(&self, elapsed: Duration) -> ProgressReport {
     let elapsed_ms = elapsed.as_millis() as u64;
     ProgressReport {
       stage: self.stage,
       detail: self.detail.clone(),
-      done: self.done,
-      total: self.total,
+      done: self.stage_done,
+      total: self.stage_total,
+      percent: self.position * 100 / SCALE,
       elapsed_ms,
-      eta_ms: eta_ms(elapsed_ms, self.done, self.total),
+      eta_ms: eta_ms(elapsed_ms, self.position),
     }
   }
 }
@@ -141,7 +185,8 @@ pub struct Progress {
 
 impl Progress {
   pub fn new(machine: bool) -> Self {
-    let state = Arc::new(Mutex::new(State { stage: Stage::Resolve, detail: None, done: 0, total: BASE_UNITS }));
+    let state =
+      Arc::new(Mutex::new(State { stage: Stage::Resolve, detail: None, stage_done: 0, stage_total: 0, position: 0 }));
     let started = Instant::now();
     if machine {
       let (tx, rx) = channel::<()>();
@@ -157,9 +202,11 @@ impl Progress {
       Self { started, state, bar: None, ticker_stop: Some(tx), ticker: Some(ticker) }
     } else {
       // Draws to stderr by default; auto-hidden when stderr is not a tty.
-      let bar = ProgressBar::new(BASE_UNITS);
+      // Fixed length: the weighted position moves through 0..=SCALE, so the
+      // bar fills linearly instead of rescaling as work is discovered.
+      let bar = ProgressBar::new(SCALE);
       bar.set_style(
-        ProgressStyle::with_template("{spinner:.green} {msg:24!} {bar:32} {pos}/{len} eta {eta}")
+        ProgressStyle::with_template("{spinner:.green} {msg:24!} {bar:32} {percent:>3}% eta {eta}")
           .expect("static template is valid"),
       );
       bar.enable_steady_tick(Duration::from_millis(100));
@@ -171,25 +218,22 @@ impl Progress {
     self.state.lock().expect("no thread panics while holding this lock")
   }
 
-  /// Enter a stage. Machine mode reports stage changes immediately (they are
-  /// sparse), so even sub-second runs produce one line per stage.
-  pub fn stage(&self, stage: Stage) {
+  /// Enter a stage with the number of work items known up front (extend
+  /// later with [`Progress::add_work`]). Machine mode reports stage changes
+  /// immediately (they are sparse), so even sub-second runs stream one line
+  /// per stage.
+  pub fn stage(&self, stage: Stage, known_items: u64) {
     let mut s = self.locked();
     s.stage = stage;
     s.detail = None;
+    s.stage_done = 0;
+    s.stage_total = known_items;
+    let position = s.advance();
     if let Some(bar) = &self.bar {
+      bar.set_position(position);
       bar.set_message(stage.label().to_string());
     } else {
       emit(&s, self.started.elapsed());
-    }
-  }
-
-  /// Newly discovered work items (snapshot boundaries, blobs) extend the total.
-  pub fn add_work(&self, n: u64) {
-    let mut s = self.locked();
-    s.total += n;
-    if let Some(bar) = &self.bar {
-      bar.set_length(s.total);
     }
   }
 
@@ -197,23 +241,25 @@ impl Progress {
   /// once-per-second ticker covers cadence without flooding stderr.
   pub fn step(&self, detail: &str) {
     let mut s = self.locked();
-    s.done += 1;
+    s.stage_done += 1;
     s.detail = if detail.is_empty() { None } else { Some(detail.to_string()) };
+    let position = s.advance();
     if let Some(bar) = &self.bar {
-      bar.inc(1);
+      bar.set_position(position);
       let label = s.stage.label();
       bar.set_message(if detail.is_empty() { label.to_string() } else { format!("{label}: {detail}") });
     }
   }
 
-  /// Successful completion: snap `done` to `total`, emit the final `Done`
-  /// report in machine mode, and remove the bar.
+  /// Successful completion: snap the position to 100%, emit the final
+  /// `Done` report in machine mode, and remove the bar.
   pub fn finish(mut self) {
     {
       let mut s = self.locked();
       s.stage = Stage::Done;
       s.detail = None;
-      s.done = s.total;
+      s.stage_done = s.stage_total;
+      s.position = SCALE;
       if self.bar.is_none() {
         emit(&s, self.started.elapsed());
       }
@@ -249,31 +295,80 @@ mod tests {
   // stream (cli/tests/cli.rs) are.
 
   #[test]
-  fn eta_extrapolates_linearly() {
-    assert_eq!(eta_ms(0, 0, 10), None, "no work done yet, no basis");
-    assert_eq!(eta_ms(1000, 0, 10), None);
-    assert_eq!(eta_ms(1000, 1, 10), Some(9000));
-    assert_eq!(eta_ms(1000, 5, 10), Some(1000));
-    assert_eq!(eta_ms(1000, 10, 10), Some(0));
-    assert_eq!(eta_ms(1000, 10, 5), Some(0), "total below done clamps, never underflows");
+  fn stage_spans_tile_the_bar() {
+    let stages = [
+      Stage::Resolve,
+      Stage::MergeBase,
+      Stage::Diff,
+      Stage::Commits,
+      Stage::Scan,
+      Stage::Snapshots,
+      Stage::Render,
+      Stage::Write,
+    ];
+    let mut expected_start = 0;
+    for stage in stages {
+      let (start, end) = stage.span();
+      assert_eq!(start, expected_start, "{stage:?} leaves a gap or overlaps");
+      assert!(end > start, "{stage:?} has an empty span");
+      expected_start = end;
+    }
+    assert_eq!(expected_start, SCALE, "the spans cover the whole bar");
+  }
+
+  #[test]
+  fn position_is_monotonic_even_as_work_grows() {
+    let mut s = State { stage: Stage::Snapshots, detail: None, stage_done: 0, stage_total: 4, position: 0 };
+    s.stage_done = 3;
+    let before = s.advance();
+    s.stage_total = 40; // a burst of discovered work: 3/40 << 3/4
+    let after = s.advance();
+    assert!(after >= before, "position moved backwards: {before} -> {after}");
+    s.stage_done = 40;
+    assert!(s.advance() > after, "completing the discovered work still advances");
+  }
+
+  #[test]
+  fn interpolation_stays_inside_the_stage_span() {
+    let (start, end) = Stage::Snapshots.span();
+    let mut s = State { stage: Stage::Snapshots, detail: None, stage_done: 0, stage_total: 10, position: start };
+    assert_eq!(s.advance(), start);
+    s.stage_done = 10;
+    assert_eq!(s.advance(), end, "a fully done stage reaches exactly its end");
+    s.stage_done = 20; // over-stepping is clamped, never spills into the next span
+    assert_eq!(s.advance(), end);
+  }
+
+  #[test]
+  fn eta_extrapolates_from_the_weighted_position() {
+    assert_eq!(eta_ms(1000, 0), None, "no progress yet, no basis");
+    assert_eq!(eta_ms(1000, 500), Some(1000), "half done in 1s: 1s remains");
+    assert_eq!(eta_ms(3000, 750), Some(1000));
+    assert_eq!(eta_ms(1000, SCALE), Some(0));
   }
 
   #[test]
   fn report_serializes_as_documented() {
-    let state = State { stage: Stage::Snapshots, detail: Some("blob 1a2b3c4d".into()), done: 3, total: 12 };
+    let state = State {
+      stage: Stage::Snapshots,
+      detail: Some("blob 1a2b3c4d".into()),
+      stage_done: 3,
+      stage_total: 12,
+      position: 305,
+    };
     let value = serde_json::json!({ "Progress": state.report(Duration::from_millis(1500)) });
     assert_eq!(
       value,
       serde_json::json!({ "Progress": {
         "stage": "Snapshots", "detail": "blob 1a2b3c4d",
-        "done": 3, "total": 12, "elapsed_ms": 1500, "eta_ms": 4500,
+        "done": 3, "total": 12, "percent": 30, "elapsed_ms": 1500, "eta_ms": 3418,
       }})
     );
   }
 
   #[test]
   fn absent_fields_are_omitted_not_null() {
-    let state = State { stage: Stage::Resolve, detail: None, done: 0, total: 7 };
+    let state = State { stage: Stage::Resolve, detail: None, stage_done: 0, stage_total: 2, position: 0 };
     let text = serde_json::json!({ "Progress": state.report(Duration::ZERO) }).to_string();
     assert!(!text.contains("detail"), "{text}");
     assert!(!text.contains("eta_ms"), "{text}");
@@ -281,7 +376,7 @@ mod tests {
 
   #[test]
   fn report_rejects_unknown_fields() {
-    let bad = r#"{ "stage": "Diff", "done": 1, "total": 7, "elapsed_ms": 10, "sneaky": true }"#;
+    let bad = r#"{ "stage": "Diff", "done": 1, "total": 7, "percent": 5, "elapsed_ms": 10, "sneaky": true }"#;
     assert!(serde_json::from_str::<ProgressReport>(bad).is_err());
   }
 }
