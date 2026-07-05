@@ -43,7 +43,7 @@ fn render_commits(doc: &DiffDocument) -> String {
   let mut out = String::new();
   if doc.snapshots.is_some() {
     out.push_str(
-      r#"<div class="hint">Click a commit to see only its diff; shift-click extends the selection to a range. Commenting works on the full diff only.</div>"#,
+      r#"<div class="hint">Click a commit to see only its diff; click a second commit to select the range between them (or shift-click to extend). Click again to reset. Commenting works on the full diff only.</div>"#,
     );
   }
   out.push_str(r#"<table class="commits">"#);
@@ -126,13 +126,38 @@ fn render_markdown_preview(f: &FileDiff) -> String {
   format!(r#"<div class="md-preview" hidden>{note}{}</div>"#, chunks.join(""))
 }
 
-fn render_file(f: &FileDiff) -> String {
-  let badge = match f.status {
-    FileStatus::Modified => String::new(),
-    FileStatus::Added => r#"<span class="badge badge-added">added</span> "#.into(),
-    FileStatus::Deleted => r#"<span class="badge badge-deleted">deleted</span> "#.into(),
-    FileStatus::Renamed => r#"<span class="badge badge-renamed">renamed</span> "#.into(),
-  };
+/// The status badge shown before a file's name; empty for a plain edit.
+fn status_badge(status: FileStatus) -> &'static str {
+  match status {
+    FileStatus::Modified => "",
+    FileStatus::Added => r#"<span class="badge badge-added">added</span> "#,
+    FileStatus::Deleted => r#"<span class="badge badge-deleted">deleted</span> "#,
+    FileStatus::Renamed => r#"<span class="badge badge-renamed">renamed</span> "#,
+  }
+}
+
+/// The "Files changed" index: one clickable row per file, linking to the
+/// file's diff panel (`#file-N`) further down the page.
+fn render_file_list(files: &[FileDiff]) -> String {
+  if files.is_empty() {
+    return r#"<p class="muted">No changes between these refs.</p>"#.to_string();
+  }
+  let mut out = String::from(r#"<table class="filelist">"#);
+  for (i, f) in files.iter().enumerate() {
+    out.push_str(&format!(
+      r##"<tr><td class="fl-path">{badge}<a href="#file-{i}">{path}</a></td><td class="fl-stats"><span class="adds">+{adds}</span> <span class="dels">−{dels}</span></td></tr>"##,
+      badge = status_badge(f.status),
+      path = esc(&f.display_path()),
+      adds = f.additions,
+      dels = f.deletions,
+    ));
+  }
+  out.push_str("</table>");
+  out
+}
+
+fn render_file(index: usize, f: &FileDiff) -> String {
+  let badge = status_badge(f.status);
   let notes: String = f.notes.iter().map(|n| format!(r#"<div class="muted note">{}</div>"#, esc(n))).collect();
   let renderable_markdown =
     is_markdown_path(f.anchor_path()) && !f.binary && f.status != FileStatus::Deleted && !f.hunks.is_empty();
@@ -177,7 +202,7 @@ fn render_file(f: &FileDiff) -> String {
     }
   };
   format!(
-    r#"<details class="file" open><summary>{badge}<span class="path">{}</span> <span class="stats">{toggle}<span class="adds">+{}</span> <span class="dels">−{}</span></span></summary>{notes}{body}</details>"#,
+    r#"<details class="file" id="file-{index}" open><summary>{badge}<span class="path">{}</span> <span class="stats">{toggle}<span class="adds">+{}</span> <span class="dels">−{}</span></span></summary>{notes}{body}</details>"#,
     esc(&f.display_path()),
     f.additions,
     f.deletions,
@@ -202,8 +227,9 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   let files_html: String = if doc.files.is_empty() {
     r#"<p class="muted">No changes between these refs.</p>"#.to_string()
   } else {
-    doc.files.iter().map(render_file).collect()
+    doc.files.iter().enumerate().map(|(i, f)| render_file(i, f)).collect()
   };
+  let file_list_html = render_file_list(&doc.files);
   let short = |sha: &str| sha[..sha.len().min(12)].to_string();
 
   let mut page = String::with_capacity(64 * 1024 + wasm_bytes.len() * 4 / 3);
@@ -214,7 +240,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   page.push_str(CSS);
   page.push_str("</style>\n</head>\n<body>\n");
   page.push_str(&format!(
-        r#"<header class="top">
+        r##"<header class="top">
 <h1>{title}</h1>
 <div class="range"><code>{base}</code> ({base_sha}) → <code>{head}</code> ({head_sha}) <span class="muted">· merge-base <code>{mb}</code> · generated {gen} · {tool}</span></div>
 <div class="hint">{ncommits} commit(s) · {nfiles} file(s) changed · <span class="adds">+{adds}</span> <span class="dels">−{dels}</span> · click any diff line to comment (markdown supported) — comments stay in this browser (localStorage) until you export them.</div>
@@ -229,7 +255,12 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <span id="wasm-error"></span>
 </div>
 </header>
-"#,
+<nav id="topnav">
+<a href="#commits">Commits <span class="count" id="nav-commits">{ncommits}</span></a>
+<a href="#files">Files changed <span class="count" id="nav-files">{nfiles}</span></a>
+<a href="#diff">Diff <span class="count" id="nav-diff"><span class="adds">+{adds}</span> <span class="dels">−{dels}</span></span></a>
+</nav>
+"##,
         title = esc(&page_title),
         base = esc(&doc.base.name),
         base_sha = esc(&short(&doc.base.sha)),
@@ -248,9 +279,15 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
         r#"<div id="unanchored" style="display:none"><strong>Unanchored comments</strong> <span class="muted">(their diff lines are not in this rendering — e.g. regenerated with different context)</span></div>
 "#,
     );
-  page.push_str("<section><h2>Commits</h2>");
+  page.push_str("<section id=\"commits\"><h2>Commits</h2>");
   page.push_str(&render_commits(doc));
-  page.push_str("</section>\n<section><h2>Files changed</h2>");
+  page.push_str("</section>\n");
+  page.push_str("<section id=\"files\"><h2>Files changed</h2>");
+  page.push_str("<div id=\"filelist-full\">");
+  page.push_str(&file_list_html);
+  page.push_str("</div><div id=\"filelist-range\" hidden></div>");
+  page.push_str("</section>\n");
+  page.push_str("<section id=\"diff\"><h2>Diff</h2>");
   page.push_str("<div id=\"files-full\">");
   page.push_str(&files_html);
   page.push_str("</div><div id=\"files-range\" hidden></div>");
@@ -288,9 +325,26 @@ main { max-width:1100px; margin:0 auto; padding:0 16px 64px; }
 a { color:var(--accent); text-decoration:none; }
 code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
 .muted { color:var(--muted); }
-header.top { border-bottom:1px solid var(--border); background:var(--panel);
-  padding:16px; position:sticky; top:0; z-index:10; }
+:root { --nav-h:39px; }
+header.top { border-bottom:1px solid var(--border); background:var(--panel); padding:16px; }
 header.top h1 { margin:0 0 4px; font-size:18px; }
+nav#topnav { position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:4px;
+  background:var(--panel); border-bottom:1px solid var(--border); padding:6px 16px; }
+nav#topnav a { color:var(--fg); padding:3px 10px; border-radius:6px; font-size:13px; font-weight:600; }
+nav#topnav a:hover { background:var(--bg); }
+nav#topnav a.active { background:var(--bg); box-shadow:inset 0 -2px 0 var(--accent); }
+nav#topnav .count { color:var(--muted); font-weight:400; margin-left:2px; }
+nav#topnav .nav-spacer { flex:1; }
+nav#topnav button { background:var(--bg); color:var(--fg); border:1px solid var(--border);
+  border-radius:6px; padding:3px 10px; font-size:13px; cursor:pointer; }
+nav#topnav button:hover:not(:disabled) { border-color:var(--accent); }
+nav#topnav button:disabled { opacity:.5; cursor:not-allowed; }
+section[id] { scroll-margin-top:var(--nav-h); }
+details.file { scroll-margin-top:calc(var(--nav-h) + 4px); }
+table.filelist { width:100%; border-collapse:collapse; }
+table.filelist td { padding:3px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
+table.filelist td.fl-path { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; }
+table.filelist td.fl-stats { white-space:nowrap; text-align:right; width:1%; }
 header.top .range code { background:var(--bg); border:1px solid var(--border);
   border-radius:6px; padding:1px 6px; }
 .toolbar { margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
@@ -319,9 +373,12 @@ button.copy-sha:hover { border-color:var(--accent); color:var(--fg); }
   border-radius:6px; padding:2px 10px; font-size:12px; cursor:pointer; }
 #range-bar button:hover { border-color:var(--accent); }
 #range-label { font-weight:600; }
-details.file { border:1px solid var(--border); border-radius:8px; margin:12px 0; overflow:hidden; }
+details.file { border:1px solid var(--border); border-radius:8px; margin:12px 0; }
 details.file > summary { cursor:pointer; padding:8px 12px; background:var(--panel);
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; }
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px;
+  position:sticky; top:var(--nav-h); z-index:5; border-radius:8px 8px 0 0;
+  border-bottom:1px solid var(--border); }
+details.file:not([open]) > summary { border-bottom:none; border-radius:8px; }
 details.file .stats { float:right; }
 .adds { color:#1a7f37; } .dels { color:#cf222e; }
 @media (prefers-color-scheme: dark) { .adds{color:#3fb950;} .dels{color:#f85149;} }
@@ -624,13 +681,19 @@ const JS: &str = r##"
     const row = ev.target.closest('tr.commit.selectable');
     if (!row || !SNAPSHOTS) return;
     const idx = Number(row.dataset.index);
+    const single = rangeFrom !== null && rangeFrom === rangeTo;
     if (ev.shiftKey && rangeFrom !== null) {
+      // Shift-click extends the current selection's span to include idx.
       rangeFrom = Math.min(rangeFrom, idx);
       rangeTo = Math.max(rangeTo, idx);
     } else if (rangeFrom === idx && rangeTo === idx) {
       rangeFrom = rangeTo = null; // clicking the sole selected commit deselects
+    } else if (single) {
+      // A single commit is selected; a plain click on another spans the range.
+      rangeFrom = Math.min(rangeFrom, idx);
+      rangeTo = Math.max(rangeTo, idx);
     } else {
-      rangeFrom = rangeTo = idx;
+      rangeFrom = rangeTo = idx; // no selection, or a range was selected: (re)start at idx
     }
     applyRange();
   });
@@ -640,19 +703,35 @@ const JS: &str = r##"
     applyRange();
   });
 
+  // Full-diff nav counts, captured once so resetting the range restores them.
+  const FULL_COUNTS = {
+    files: document.getElementById('nav-files').textContent,
+    diff: document.getElementById('nav-diff').innerHTML,
+  };
+  function setNavCounts(filesText, diffHtml) {
+    document.getElementById('nav-files').textContent = filesText;
+    document.getElementById('nav-diff').innerHTML = diffHtml;
+  }
+
   function applyRange() {
     const bar = document.getElementById('range-bar');
-    const full = document.getElementById('files-full');
-    const ranged = document.getElementById('files-range');
+    const fullFiles = document.getElementById('files-full');
+    const rangedFiles = document.getElementById('files-range');
+    const fullList = document.getElementById('filelist-full');
+    const rangedList = document.getElementById('filelist-range');
     document.querySelectorAll('tr.commit').forEach((tr) => {
       const i = Number(tr.dataset.index);
       tr.classList.toggle('selected', rangeFrom !== null && i >= rangeFrom && i <= rangeTo);
     });
     if (rangeFrom === null) {
       bar.hidden = true;
-      ranged.hidden = true;
-      ranged.textContent = '';
-      full.style.display = '';
+      rangedFiles.hidden = true;
+      rangedFiles.textContent = '';
+      rangedList.hidden = true;
+      rangedList.textContent = '';
+      fullFiles.style.display = '';
+      fullList.style.display = '';
+      setNavCounts(FULL_COUNTS.files, FULL_COUNTS.diff);
       return;
     }
     let files;
@@ -663,14 +742,27 @@ const JS: &str = r##"
       alert('Range diff failed: ' + e.message);
       return;
     }
-    ranged.textContent = '';
+    rangedFiles.textContent = '';
+    rangedList.textContent = '';
     if (files.length === 0) {
       const p = document.createElement('p');
       p.className = 'muted';
       p.textContent = 'No changes in the selected commits.';
-      ranged.appendChild(p);
+      rangedFiles.appendChild(p);
+      rangedList.appendChild(p.cloneNode(true));
     }
-    for (const f of files) ranged.appendChild(rangeFileEl(f));
+    let adds = 0, dels = 0;
+    const list = document.createElement('table');
+    list.className = 'filelist';
+    files.forEach((f, i) => {
+      rangedFiles.appendChild(rangeFileEl(f, i));
+      list.appendChild(rangeFileListRow(f, i));
+      adds += f.additions;
+      dels += f.deletions;
+    });
+    if (files.length) rangedList.appendChild(list);
+    setNavCounts(String(files.length),
+      '<span class="adds">+' + adds + '</span> <span class="dels">−' + dels + '</span>');
     const shortOf = (i) =>
       document.querySelector('tr.commit[data-index="' + i + '"] code').textContent;
     const n = rangeTo - rangeFrom + 1;
@@ -678,16 +770,52 @@ const JS: &str = r##"
       ? 'Showing commit ' + shortOf(rangeFrom) + ' only'
       : 'Showing commits ' + shortOf(rangeFrom) + '..' + shortOf(rangeTo) + ' (' + n + ' commits)';
     bar.hidden = false;
-    full.style.display = 'none';
-    ranged.hidden = false;
+    fullFiles.style.display = 'none';
+    fullList.style.display = 'none';
+    rangedFiles.hidden = false;
+    rangedList.hidden = false;
+  }
+
+  // One row of the range-mode file index, linking to the range file panel.
+  function rangeFileListRow(f, i) {
+    const tr = document.createElement('tr');
+    const path = document.createElement('td');
+    path.className = 'fl-path';
+    if (f.status !== 'Modified') {
+      const badge = document.createElement('span');
+      badge.className = 'badge badge-' + f.status.toLowerCase();
+      badge.textContent = f.status.toLowerCase();
+      path.appendChild(badge);
+      path.appendChild(document.createTextNode(' '));
+    }
+    const a = document.createElement('a');
+    a.href = '#rfile-' + i;
+    a.textContent = f.old_path && f.new_path && f.old_path !== f.new_path
+      ? f.old_path + ' → ' + f.new_path : (f.new_path || f.old_path);
+    path.appendChild(a);
+    const stats = document.createElement('td');
+    stats.className = 'fl-stats';
+    const adds = document.createElement('span');
+    adds.className = 'adds';
+    adds.textContent = '+' + f.additions;
+    const dels = document.createElement('span');
+    dels.className = 'dels';
+    dels.textContent = '−' + f.deletions;
+    stats.appendChild(adds);
+    stats.appendChild(document.createTextNode(' '));
+    stats.appendChild(dels);
+    tr.appendChild(path);
+    tr.appendChild(stats);
+    return tr;
   }
 
   // Build a file panel for a wasm-computed FileDiff. DOM-built (values land
   // via textContent, never markup), and NOT commentable — range rows carry
   // no anchors on purpose.
-  function rangeFileEl(f) {
+  function rangeFileEl(f, i) {
     const details = document.createElement('details');
     details.className = 'file';
+    details.id = 'rfile-' + i;
     details.open = true;
     const summary = document.createElement('summary');
     if (f.status !== 'Modified') {
@@ -823,6 +951,27 @@ const JS: &str = r##"
     };
     reader.readAsText(file);
   });
+
+  // ---- nav scrollspy: highlight the section currently under the nav bar ----
+  (function () {
+    const links = Array.prototype.map.call(
+      document.querySelectorAll('nav#topnav a'),
+      (a) => ({ a: a, sec: document.getElementById(a.getAttribute('href').slice(1)) })
+    ).filter((x) => x.sec);
+    if (!links.length) return;
+    const navH = document.getElementById('topnav').offsetHeight;
+    let raf = 0;
+    function update() {
+      raf = 0;
+      let current = links[0];
+      for (const l of links) {
+        if (l.sec.getBoundingClientRect().top <= navH + 4) current = l;
+      }
+      for (const l of links) l.a.classList.toggle('active', l === current);
+    }
+    window.addEventListener('scroll', () => { if (!raf) raf = requestAnimationFrame(update); }, { passive: true });
+    update();
+  })();
 
   doc = initDoc();
   renderAll();

@@ -142,6 +142,18 @@ fn end_to_end() {
   for id in ["export-json", "export-md", "export-csv", "copy-md", "import-json"] {
     assert!(html.contains(&format!("id=\"{id}\"")), "missing #{id}");
   }
+  // Three navigable sections and a sticky nav that links to each, plus a
+  // "Files changed" index whose rows anchor into the diff panels.
+  assert!(html.contains(r#"<nav id="topnav">"#));
+  for id in ["commits", "files", "diff"] {
+    assert!(html.contains(&format!("<section id=\"{id}\"")), "missing #{id} section");
+    assert!(html.contains(&format!("href=\"#{id}\"")), "nav missing link to #{id}");
+  }
+  // One index row and one diff panel per file (5 in the fixture), anchored to
+  // matching #file-N ids.
+  assert_eq!(html.matches(r#"class="filelist""#).count(), 1);
+  assert_eq!(html.matches("href=\"#file-").count(), 5);
+  assert_eq!(html.matches("<details class=\"file\" id=\"file-").count(), 5);
 
   // The dumped DiffDocument parses back through the dto schema, with
   // single-key line unions.

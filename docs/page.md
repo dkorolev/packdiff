@@ -7,24 +7,33 @@ below happens locally in your browser.
 ## Layout
 
 - **Header** — repo, `base (sha) → head (sha)`, the merge-base, generation
-  time, totals, and the comment toolbar.
+  time, and the comment toolbar.
+- **Sticky nav** — always visible below the header, with three jump links
+  carrying live counts: **Commits** (N), **Files changed** (N), and **Diff**
+  (`+adds −dels`). The link for the section you are scrolling through is
+  highlighted. When a commit range is selected the Files and Diff counts
+  update to that sub-range.
 - **Commits** — the commit list for the diffed range, oldest first.
-- **Files changed** — one collapsible panel per file (click the path row to
+- **Files changed** — a compact index, one row per file with its status
+  badge and `+/−` counts; click a row to jump to that file's diff panel.
+- **Diff** — one collapsible panel per file (click the path row to
   fold/unfold), with status badges (`added` / `deleted` / `renamed`), per-file
   `+/−` counts, and the diff table: old line number, new line number, code.
-  Binary files show a notice instead of content.
-  With two or more commits in the range, clicking commits filters this
-  section to a sub-range (see below).
+  While you scroll through a file, its path row stays pinned under the nav so
+  you can fold it away without scrolling back up. Binary files show a notice
+  instead of content.
 
 ## Filtering by commits
 
 When the range has two or more commits, the commit list is interactive:
 
-- **Click a commit** to see only that commit's diff. **Shift-click** another
-  commit to extend the selection to the whole contiguous range between them.
-  Clicking the only selected commit again — or the *Show full diff* button in
-  the bar that appears — returns to the full diff.
+- **Click a commit** to see only that commit's diff. **Click a second commit**
+  to select the contiguous range between the two (shift-click also extends an
+  existing selection). Clicking the only selected commit again — or the
+  *Show full diff* button in the bar that appears — returns to the full diff.
 - Every commit row has a **copy** button that copies the full 40-hex hash.
+- The Files-changed index and the nav counts follow the selection, so you
+  always see the file list and totals for exactly what is shown.
 
 Sub-range diffs are computed inside the page: the file contents at every
 commit boundary ship in the HTML (deduplicated by git blob id; binary and
