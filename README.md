@@ -29,10 +29,13 @@ diff, and the comment engine are all inside the one file.
   supported). Comments persist in the browser's localStorage, keyed to the
   exact repo + commit SHAs.
 - **Markdown files render**: `.md` files in the diff get a *View rendered*
-  toggle switching between the diff text and the rendered markdown view.
-- **Filter by commits**: click a commit to see only its diff, shift-click to
-  select a contiguous range (computed in-page by the WASM engine), and copy
-  any commit's full hash with one button.
+  toggle switching between the diff text and the rendered markdown view, with
+  added lines tinted green and removed lines red.
+- **Filter by commits**: click a commit to see only its diff, click a second
+  to select the range between them (computed in-page by the WASM engine), and
+  copy any commit's full hash with one button.
+- **Navigate quickly**: a sticky nav with live counts (commits · files · LOC
+  delta) and a *Files changed* index that jumps straight to any file's diff.
 - **Export** the review as lossless JSON, Markdown grouped by file, or
   RFC 4180 CSV — and **import** JSON back on another machine (merge by
   comment id, newer edit wins).
