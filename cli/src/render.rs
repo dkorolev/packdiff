@@ -326,6 +326,8 @@ const CSS: &str = r##"
 body { margin:0; background:var(--bg); color:var(--fg);
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
 main { max-width:1100px; margin:0 auto; padding:0 16px 64px; }
+/* split view spans the window, capped so each code column tops out near 121ch */
+body.view-split main { max-width:1920px; }
 a { color:var(--accent); text-decoration:none; }
 code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
 .muted { color:var(--muted); }
@@ -402,7 +404,7 @@ tr.commentable td.code { cursor:pointer; }
 tr.commentable:hover td.code { outline:1px dashed var(--accent); outline-offset:-1px; }
 /* side-by-side: four columns (old ln, old code, new ln, new code) */
 table.diff.split { table-layout:fixed; }
-table.diff.split td.code { width:calc(50% - 40px); }
+table.diff.split col.ln-col { width:56px; }
 table.diff.split td:nth-child(2) { border-right:1px solid var(--border); }
 table.diff.split td.code.add, table.diff.split td.ln.add { background:var(--add-bg); }
 table.diff.split td.code.del, table.diff.split td.ln.del { background:var(--del-bg); }
@@ -1047,6 +1049,15 @@ const JS: &str = r##"
   function buildSplit(unified) {
     const split = document.createElement('table');
     split.className = 'diff split';
+    // With table-layout:fixed the first row would set column widths, and that
+    // row is often a colspan-4 hunk header; a colgroup pins the widths instead.
+    const cols = document.createElement('colgroup');
+    for (const cls of ['ln-col', '', 'ln-col', '']) {
+      const col = document.createElement('col');
+      if (cls) col.className = cls;
+      cols.appendChild(col);
+    }
+    split.appendChild(cols);
     let dels = [], adds = [];
     function flush() {
       const n = Math.max(dels.length, adds.length);
