@@ -237,6 +237,9 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   let mut page = String::with_capacity(64 * 1024 + wasm_bytes.len() * 4 / 3);
   page.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
   page.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
+  // Inline SVG favicon — a `❯` prompt chevron on a dark rounded tile, as a `data:` URI so the
+  // page stays a single self-contained file with no external requests.
+  page.push_str("<link rel=\"icon\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23181a20'/%3E%3Ctext x='3.5' y='12.5' font-size='11' fill='%234493f8'%3E%E2%9D%AF%3C/text%3E%3C/svg%3E\">\n");
   page.push_str(&format!("<title>{}</title>\n", esc(&page_title)));
   page.push_str("<style>");
   page.push_str(CSS);
