@@ -5,14 +5,18 @@ Checks, in order:
 
 1. The PR's two version literals in the root Cargo.toml agree
    (`[workspace.package] version` and the `packdiff-dto` dependency pin).
-2. The version published on crates.io equals the version on the base branch
-   (what is on `main` is what users can install).
-3. The PR's version is exactly one above the published one — next patch for
+2. All published modules (packdiff-dto, packdiff-wasm, packdiff) serve the
+   same version on crates.io — a partial publish blocks everything until it
+   is finished (in dependency order: dto, wasm, cli).
+3. Versions move forward: crates.io never serves more than the base branch
+   holds. The base branch being ahead of crates.io is fine — a pending
+   release, reported as a warning.
+4. The PR's version is exactly one above the base branch — next patch for
    a compatible release, or next minor / major for a breaking one (per the
    published-crate policy in PUBLISHING.md).
 
-Base case: while nothing is published yet, step 2 is skipped with a warning
-and step 3 gates against the base branch's version instead.
+Base case: while nothing is published yet, steps 2 and 3 are skipped with a
+warning.
 
 Runs in CI with BASE_REPO/BASE_REF from the pull-request event; runnable
 locally too (defaults below). Exits non-zero with a `::error::` line on the
@@ -27,6 +31,8 @@ import urllib.error
 import urllib.request
 
 USER_AGENT = "packdiff-version-gate (https://github.com/dkorolev/packdiff)"
+
+MODULES = ["packdiff-dto", "packdiff-wasm", "packdiff"]
 
 
 def fail(message):
@@ -56,6 +62,17 @@ def pretty(version):
     return ".".join(map(str, version))
 
 
+def published_version(module):
+    """The version crates.io serves for a module, or None if never published."""
+    try:
+        crate = json.loads(fetch(f"https://crates.io/api/v1/crates/{module}"))
+        return tuple(map(int, crate["crate"]["max_version"].split(".")))
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
 def main():
     manifest = open("Cargo.toml").read()
     pr_version = parse_version(manifest, "the PR's root Cargo.toml")
@@ -71,33 +88,37 @@ def main():
     base_manifest = fetch(f"https://raw.githubusercontent.com/{base_repo}/{base_ref}/Cargo.toml")
     base_version = parse_version(base_manifest, f"{base_repo}@{base_ref} Cargo.toml")
 
-    try:
-        crate = json.loads(fetch("https://crates.io/api/v1/crates/packdiff"))
-        published = tuple(map(int, crate["crate"]["max_version"].split(".")))
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            published = None
-        else:
-            raise
+    versions = {module: published_version(module) for module in MODULES}
+    module_report = ", ".join(f"{m} {pretty(v) if v else 'unpublished'}" for m, v in versions.items())
 
-    if published is None:
-        print(f"::warning::packdiff is not on crates.io yet; gating against {base_repo}@{base_ref} instead")
-        if not one_above(base_version, pr_version):
-            fail(
-                f"PR version {pretty(pr_version)} must be exactly one above "
-                f"{base_repo}@{base_ref} ({pretty(base_version)}) until a first version is published"
-            )
+    if all(v is None for v in versions.values()):
+        print("::warning::nothing is on crates.io yet; skipping the published-version checks")
+    elif len(set(versions.values())) > 1:
+        fail(
+            f"crates.io modules disagree ({module_report}) — a publish was left half-done; "
+            f"finish it in dependency order (dto, then wasm, then cli) before merging"
+        )
     else:
-        if published != base_version:
+        published = next(iter(versions.values()))
+        if published > base_version:
             fail(
-                f"crates.io serves {pretty(published)} but {base_repo}@{base_ref} holds "
-                f"{pretty(base_version)} — publish main (or sync it) before merging a new version"
+                f"crates.io serves {pretty(published)} but {base_repo}@{base_ref} holds only "
+                f"{pretty(base_version)} — sync {base_ref} before merging a new version"
             )
-        if not one_above(published, pr_version):
-            fail(f"PR version {pretty(pr_version)} must be exactly one above the published {pretty(published)}")
+        if published < base_version:
+            print(
+                f"::warning::pending release: crates.io serves {pretty(published)} but "
+                f"{base_repo}@{base_ref} already holds {pretty(base_version)} — remember to publish"
+            )
 
-    published_note = f"published {pretty(published)}" if published else "nothing published yet"
-    print(f"version gate ok: PR {pretty(pr_version)}, {published_note}, {base_repo}@{base_ref} {pretty(base_version)}")
+    if not one_above(base_version, pr_version):
+        fail(
+            f"PR version {pretty(pr_version)} must be exactly one above "
+            f"{base_repo}@{base_ref} ({pretty(base_version)})"
+        )
+
+    published_note = module_report if any(versions.values()) else "nothing published yet"
+    print(f"version gate ok: PR {pretty(pr_version)}, {base_repo}@{base_ref} {pretty(base_version)}, {published_note}")
 
 
 if __name__ == "__main__":

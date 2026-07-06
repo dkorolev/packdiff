@@ -55,10 +55,11 @@ Why the internal dep carries both `path` and `version`: inside the workspace car
 Every PR runs `.github/workflows/version-gate.yml`, which enforces the release ladder mechanically (`.github/version-gate.py`, also runnable locally):
 
 1. The two version literals in the root `Cargo.toml` agree (`[workspace.package]` and the `packdiff-dto` pin).
-2. crates.io serves exactly the version the base branch holds — `main` is always the published state.
-3. The PR's version is exactly one step above the published one: next patch for a compatible release, next minor (or major) for a breaking one.
+2. All three modules serve the same version on crates.io — a half-done publish (say, `dto` landed but `wasm`/`cli` did not) blocks every PR until it is finished, in dependency order.
+3. Versions move forward: crates.io never serves more than the base branch holds. `main` being ahead of crates.io is fine — that is a pending release, reported as a warning, published whenever convenient.
+4. The PR's version is exactly one step above the base branch: next patch for a compatible release, next minor (or major) for a breaking one.
 
-So a feature branch carries the next version — exactly one step above what is published — from its first commit; a PR whose version does not sit one step above crates.io fails the gate. (Until a first version is published the gate compares against the base branch instead, with a warning.)
+So a feature branch carries the next version — exactly one step above `main` — from its first commit; a PR whose version does not sit one step above the base branch fails the gate. (Until a first version is published the crates.io checks are skipped with a warning.)
 
 ## Releasing, step by step
 
