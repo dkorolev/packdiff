@@ -21,7 +21,7 @@ Wrote review.html (12 files, +345 −67, 5 commits)
 
 Open `review.html` anywhere — from disk (`file://`), over any static host, or mailed to a colleague. The page makes **zero network requests**: CSS, the diff, and the comment engine are all inside the one file.
 
-- **Click any diff line to comment** (Ctrl/Cmd+Enter saves; markdown supported). Comments persist in the browser's localStorage, keyed to the exact repo + commit SHAs.
+- **Click any diff line to comment** (Ctrl/Cmd+Enter saves; markdown supported) — in rendered markdown previews, click a block to comment on the source line it starts at. Comments persist in the browser's localStorage, keyed to the exact repo + commit SHAs.
 - **Markdown files render**: `.md` files in the diff get a two-sided **Preview | Diff** pill switching between the rendered markdown view (added lines tinted green, removed lines red) and the diff text.
 - **Filter by commits**: click a commit to see only its diff, click a second to select the range between them (computed in-page by the WASM engine), and copy any commit's full hash with one button.
 - **Navigate quickly**: a sticky nav with live counts (commits · files · LOC delta) and a *Files changed* index that jumps straight to any file's diff.
