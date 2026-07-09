@@ -497,6 +497,14 @@ fn notes_commits_lift_into_the_description_panel() {
   assert!(html.contains("<h1>Add evil</h1>"), "the description renders at build time");
   assert!(!html.contains("pr notes"), "the notes commit stays off the commits table");
   assert!(!html.contains(">PR-DESCRIPTION.md</a>"), "not in the Files changed index");
+  // No provenance chrome: the panel is just the description. The path
+  // appears ONLY inside comment anchors, never as visible text.
+  assert_eq!(
+    html.matches("PR-DESCRIPTION").count(),
+    html.matches(r#"data-file="PR-DESCRIPTION.md""#).count(),
+    "the path must not appear outside data-file anchors"
+  );
+  assert!(!html.contains("notes author"), "the page never names the convention");
 
   let typed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
   assert!(typed["description"]["text"].as_str().unwrap().starts_with("# Add evil"));

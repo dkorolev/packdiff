@@ -145,7 +145,10 @@ fn render_markdown_preview(f: &FileDiff) -> String {
 /// The lifted PR description as a page panel: rendered markdown whose
 /// top-level blocks carry comment anchors — `(path, New, 1-based line)` —
 /// exactly like the file previews, so the page JS needs nothing new for
-/// commenting here. A "fake file": not part of the reviewed diff.
+/// commenting here. A "fake file": not part of the reviewed diff, and shown
+/// with NO provenance chrome — no file name, no notes author. It is simply
+/// there, the way the pull request will present it; the path exists only
+/// inside the comment anchors.
 fn render_description(d: &packdiff_dto::diff::NotesFile) -> String {
   let anchor = esc(&d.path);
   let mut blocks = String::new();
@@ -155,9 +158,7 @@ fn render_description(d: &packdiff_dto::diff::NotesFile) -> String {
       line = offset + 1,
     ));
   }
-  format!(
-    r#"<div class="hint">Committed as <code>{anchor}</code> by the notes author; not part of the reviewed diff. Click a block to comment.</div><div class="md-preview">{blocks}</div>"#
-  )
+  format!(r#"<div class="md-preview">{blocks}</div>"#)
 }
 
 /// The status badge shown before a file's name; empty for a plain edit.
