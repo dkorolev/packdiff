@@ -10,9 +10,21 @@ keywords.workspace = true
 categories.workspace = true
 description = "Pack a git diff into one self-contained HTML review page — with local, exportable review comments."
 
+[features]
+# The binary and its terminal progress machinery (`indicatif`). On by
+# default so `cargo install packdiff` just works; library consumers depend
+# with `default-features = false`.
+default = ["cli"]
+cli = ["dep:indicatif"]
+
+[[bin]]
+name = "packdiff"
+path = "src/main.rs"
+required-features = ["cli"]
+
 [dependencies]
 packdiff-dto = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-indicatif = "0.17"
+indicatif = { version = "0.17", optional = true }

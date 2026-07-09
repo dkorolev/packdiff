@@ -8,6 +8,9 @@ cd "$(dirname "$0")"
 echo "== cargo fmt --check =="
 cargo fmt --all --check
 
+echo "== cargo check (the library alone, no default features) =="
+cargo check -p packdiff --lib --no-default-features
+
 echo "== cargo test (debug; builds the wasm module via cli/build.rs) =="
 cargo test --workspace
 

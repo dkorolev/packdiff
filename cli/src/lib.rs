@@ -4,7 +4,10 @@
 //!
 //! [`pack`] is the one-call path; [`build_document`] and [`render_page`] are
 //! its two halves, for callers that also want the typed document (what the
-//! CLI's `--dump-json` writes).
+//! CLI's `--dump-json` writes). Progress lands on a caller-supplied
+//! [`progress::ProgressObserver`]; `&()` reports nothing. Depend with
+//! `default-features = false` to drop the binary-only terminal machinery
+//! (`indicatif`).
 //!
 //! Requirements: `git` on `PATH` at run time, and the
 //! `wasm32-unknown-unknown` target at build time — the page's comment engine
@@ -26,7 +29,7 @@ pub use git::CliError as Error;
 use packdiff_dto::diff::DiffDocument;
 use packdiff_dto::snapshot::{Boundary, RangeSnapshots};
 use packdiff_dto::RefInfo;
-use progress::{Progress, Stage};
+use progress::{ProgressObserver, Stage};
 
 /// The compiled comment engine, inlined into every generated page.
 const WASM: &[u8] = include_bytes!(env!("PACKDIFF_WASM_PATH"));
@@ -83,7 +86,7 @@ pub fn set_verbose(enabled: bool) {
 /// data behind the page's commit-range filter. `None` for ranges of fewer
 /// than two commits, where there is nothing to filter.
 fn collect_snapshots(
-  repo: &str, merge_base: &str, commits: &[packdiff_dto::diff::Commit], progress: &Progress,
+  repo: &str, merge_base: &str, commits: &[packdiff_dto::diff::Commit], progress: &dyn ProgressObserver,
 ) -> Result<Option<RangeSnapshots>, Error> {
   if commits.len() < 2 {
     return Ok(None);
@@ -120,7 +123,7 @@ fn collect_snapshots(
 /// Extract [`PackOptions`]'s diff from git into the typed document: resolve
 /// the refs, diff, list the commits, and (for multi-commit ranges) snapshot
 /// file contents at every commit boundary for the page's range filter.
-pub fn build_document(opts: &PackOptions, progress: &Progress) -> Result<DiffDocument, Error> {
+pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Result<DiffDocument, Error> {
   progress.stage(Stage::Resolve, 2);
   let base_sha = git::resolve_ref(&opts.repo, &opts.base)?;
   progress.step(&opts.base);
@@ -160,7 +163,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>) -> String {
 /// The one-call path: [`build_document`], then [`render_page`] under
 /// [`PackOptions::title`]. The caller decides where the page goes; nothing
 /// is written to disk.
-pub fn pack(opts: &PackOptions, progress: &Progress) -> Result<PackOutput, Error> {
+pub fn pack(opts: &PackOptions, progress: &dyn ProgressObserver) -> Result<PackOutput, Error> {
   let document = build_document(opts, progress)?;
   progress.stage(Stage::Render, 1);
   let html = render_page(&document, opts.title.as_deref());

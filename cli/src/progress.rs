@@ -17,14 +17,45 @@
 //! interpolates through the span by items done within the stage. The
 //! position is additionally clamped monotonic — discovering more work can
 //! slow the bar down, but never moves it backwards.
+//!
+//! Library callers see only [`ProgressObserver`] (and the [`Stage`] /
+//! [`ProgressReport`] vocabulary): [`Progress`] and its `indicatif`
+//! dependency are the CLI's implementation, behind the default `cli`
+//! feature. `&()` is the silent observer.
 
+#[cfg(feature = "cli")]
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
+#[cfg(feature = "cli")]
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "cli")]
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+#[cfg(any(feature = "cli", test))]
+use std::time::Duration;
+#[cfg(feature = "cli")]
+use std::time::Instant;
 
+#[cfg(feature = "cli")]
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
+
+/// Where [`crate::pack`] and [`crate::build_document`] report progress.
+/// Stages arrive in execution order, each entered with its full item count
+/// known. Both methods default to no-ops, so an implementor opts into only
+/// what it needs; `&()` observes nothing.
+pub trait ProgressObserver {
+  /// A stage was entered; `known_items` work items will follow.
+  fn stage(&self, stage: Stage, known_items: u64) {
+    let _ = (stage, known_items);
+  }
+  /// One work item within the current stage finished; `detail` names it
+  /// (possibly empty — e.g. for single-item stages).
+  fn step(&self, detail: &str) {
+    let _ = detail;
+  }
+}
+
+/// The silent observer: progress is not reported anywhere.
+impl ProgressObserver for () {}
 
 /// The phases of one run, in execution order. Serialized as the bare
 /// `CamelCase` variant name inside progress reports.
@@ -55,8 +86,10 @@ pub enum Stage {
 }
 
 /// The scale positions and spans are measured in (per-mille of the run).
+#[cfg(any(feature = "cli", test))]
 const SCALE: u64 = 1000;
 
+#[cfg(any(feature = "cli", test))]
 impl Stage {
   /// Short human label for the bar's message area.
   fn label(self) -> &'static str {
@@ -123,6 +156,7 @@ pub struct ProgressReport {
 
 /// `elapsed × remaining ÷ done` over the weighted position; `None` at
 /// position zero (no basis for extrapolation).
+#[cfg(any(feature = "cli", test))]
 fn eta_ms(elapsed_ms: u64, position: u64) -> Option<u64> {
   if position == 0 {
     return None;
@@ -130,6 +164,7 @@ fn eta_ms(elapsed_ms: u64, position: u64) -> Option<u64> {
   Some(elapsed_ms.saturating_mul(SCALE - position.min(SCALE)) / position)
 }
 
+#[cfg(any(feature = "cli", test))]
 struct State {
   stage: Stage,
   detail: Option<String>,
@@ -140,6 +175,7 @@ struct State {
   position: u64,
 }
 
+#[cfg(any(feature = "cli", test))]
 impl State {
   /// Recompute the weighted position from the current stage and its item
   /// counts, ratcheting the monotonic high-water mark.
@@ -165,6 +201,7 @@ impl State {
   }
 }
 
+#[cfg(feature = "cli")]
 fn emit(state: &State, elapsed: Duration) {
   // Reports are liveness output: stderr only, one document per line.
   eprintln!("{}", serde_json::json!({ "Progress": state.report(elapsed) }));
@@ -173,6 +210,7 @@ fn emit(state: &State, elapsed: Duration) {
 /// Progress for one run. Construct once, thread through the stages, call
 /// [`Progress::finish`] on success; dropping it (e.g. on an error path)
 /// stops the ticker and clears the bar without emitting a `Done` report.
+#[cfg(feature = "cli")]
 pub struct Progress {
   started: Instant,
   state: Arc<Mutex<State>>,
@@ -183,6 +221,17 @@ pub struct Progress {
   ticker: Option<JoinHandle<()>>,
 }
 
+#[cfg(feature = "cli")]
+impl ProgressObserver for Progress {
+  fn stage(&self, stage: Stage, known_items: u64) {
+    Progress::stage(self, stage, known_items);
+  }
+  fn step(&self, detail: &str) {
+    Progress::step(self, detail);
+  }
+}
+
+#[cfg(feature = "cli")]
 impl Progress {
   pub fn new(machine: bool) -> Self {
     let state =
@@ -278,6 +327,7 @@ impl Progress {
   }
 }
 
+#[cfg(feature = "cli")]
 impl Drop for Progress {
   fn drop(&mut self) {
     // Error paths: stop the ticker and clear the bar; no `Done` is emitted,
