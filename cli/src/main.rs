@@ -51,6 +51,13 @@ OPTIONS:
   -h, --help            print this help
   -V, --version         print version
 
+ENVIRONMENT:
+  PACKDIFF_SYSTEM_USER_EMAIL   the notes-author email: commits it authored are
+                               notes, not code — they are hidden from the page
+                               and their PR-DESCRIPTION.md becomes the
+                               commentable Description panel. Set empty to
+                               disable. Default: dmitry.korolev+elon-presley@gmail.com
+
 OUTPUT MODES:
   A terminal gets a colored human summary. Piped/redirected stdout (or
   --json) gets exactly one two-space-indented JSON document per run:
@@ -313,6 +320,11 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
   opts.merge_base = args.merge_base;
   opts.context = args.context;
   opts.title = args.title.clone();
+  // The notes-author email is env-configurable; an empty value disables the
+  // notes-commit convention entirely.
+  if let Ok(email) = std::env::var("PACKDIFF_SYSTEM_USER_EMAIL") {
+    opts.notes_email = if email.trim().is_empty() { None } else { Some(email) };
+  }
   // pack() drives the Resolve → Render stages; Write stays the CLI's.
   let output = pack(&opts, &progress)?;
   let (doc, page) = (output.document, output.html);
@@ -378,6 +390,8 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
           "additions": doc.additions(),
           "deletions": doc.deletions(),
           "binary_files": doc.files.iter().filter(|f| f.binary).count(),
+          "description": doc.description.as_ref().map(|d| &d.path),
+          "notes_commits": doc.description.as_ref().map(|d| d.commits.clone()).unwrap_or_default(),
           "warnings": warnings,
         }
       });

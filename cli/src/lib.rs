@@ -34,7 +34,7 @@ pub use packdiff_dto as dto;
 
 pub use git::CliError as Error;
 
-use packdiff_dto::diff::DiffDocument;
+use packdiff_dto::diff::{DiffDocument, NotesFile};
 use packdiff_dto::snapshot::{Boundary, RangeSnapshots};
 use packdiff_dto::RefInfo;
 use progress::{ProgressObserver, Stage};
@@ -45,6 +45,16 @@ const WASM: &[u8] = include_bytes!(env!("PACKDIFF_WASM_PATH"));
 /// Blobs larger than this are not snapshotted; sub-range diffs render such
 /// files as "contents not shown" (the binary-file treatment).
 const MAX_SNAPSHOT_BLOB_BYTES: usize = 2 * 1024 * 1024;
+
+/// The default notes-author email (see [`PackOptions::notes_email`]): the
+/// identity that commits PR notes such as `PR-DESCRIPTION.md`, per the
+/// notes-commit convention. The CLI overrides it from the
+/// `PACKDIFF_SYSTEM_USER_EMAIL` environment variable.
+pub const DEFAULT_SYSTEM_USER_EMAIL: &str = "dmitry.korolev+elon-presley@gmail.com";
+
+/// The one notes file recognized today: the future pull request's
+/// description, lifted into its own commentable page panel.
+const NOTES_DESCRIPTION_PATH: &str = "PR-DESCRIPTION.md";
 
 /// What to pack: the repository, the two refs, and the diff semantics.
 /// Construct with [`PackOptions::new`] (the CLI's defaults), then adjust the
@@ -65,13 +75,27 @@ pub struct PackOptions {
   pub context: u32,
   /// Page title override; `None` derives "repo: base → head".
   pub title: Option<String>,
+  /// The notes-author email. Commits authored by it are notes, not code
+  /// under review: they are hidden from the commit list, and the
+  /// `PR-DESCRIPTION.md` they carry is lifted out of the diff into the
+  /// page's commentable Description panel. `None` disables the convention.
+  /// Defaults to [`DEFAULT_SYSTEM_USER_EMAIL`].
+  pub notes_email: Option<String>,
 }
 
 impl PackOptions {
   /// Options for diffing `base` against `head` in `repo`, with the CLI's
   /// defaults: merge-base semantics, 3 context lines, derived title.
   pub fn new(repo: impl Into<String>, base: impl Into<String>, head: impl Into<String>) -> Self {
-    Self { repo: repo.into(), base: base.into(), head: head.into(), merge_base: true, context: 3, title: None }
+    Self {
+      repo: repo.into(),
+      base: base.into(),
+      head: head.into(),
+      merge_base: true,
+      context: 3,
+      title: None,
+      notes_email: Some(DEFAULT_SYSTEM_USER_EMAIL.to_string()),
+    }
   }
 }
 
@@ -94,7 +118,8 @@ pub fn set_verbose(enabled: bool) {
 /// data behind the page's commit-range filter. `None` for ranges of fewer
 /// than two commits, where there is nothing to filter.
 fn collect_snapshots(
-  repo: &str, merge_base: &str, commits: &[packdiff_dto::diff::Commit], progress: &dyn ProgressObserver,
+  repo: &str, merge_base: &str, commits: &[packdiff_dto::diff::Commit], exclude: Option<&str>,
+  progress: &dyn ProgressObserver,
 ) -> Result<Option<RangeSnapshots>, Error> {
   if commits.len() < 2 {
     return Ok(None);
@@ -111,7 +136,9 @@ fn collect_snapshots(
     tracked.extend(git::changed_paths(repo, &pair[0], &pair[1])?);
     progress.step(&format!("changes {}..{}", &pair[0][..7], &pair[1][..7]));
   }
-  let paths: Vec<String> = tracked.into_iter().collect();
+  // A boundary pair spanning a notes commit picks up the lifted notes file;
+  // it must not resurface in sub-range diffs.
+  let paths: Vec<String> = tracked.into_iter().filter(|p| Some(p.as_str()) != exclude).collect();
   let mut boundaries = Vec::with_capacity(boundary_shas.len());
   for sha in &boundary_shas {
     let files = git::tree_blobs(repo, sha, &paths)?;
@@ -128,8 +155,51 @@ fn collect_snapshots(
   Ok(Some(RangeSnapshots { blobs, boundaries }))
 }
 
+/// Partition the range's commits per the notes-commit convention: commits
+/// authored by `notes_email` carry notes such as `PR-DESCRIPTION.md`, not
+/// code under review. When such a commit CHANGED the description (presence
+/// in its tree is not enough — a user-authored description must not be
+/// claimed), returns the code commits plus the lifted [`NotesFile`] — the
+/// description text as of the last notes commit that touched it. With no
+/// notes email, no notes commits, or no notes-authored description,
+/// everything stays as it was (hiding commits without lifting anything
+/// would lose history).
+fn split_notes(
+  repo: &str, commits: Vec<packdiff_dto::diff::Commit>, notes_email: Option<&str>,
+) -> Result<(Vec<packdiff_dto::diff::Commit>, Option<NotesFile>), Error> {
+  let Some(email) = notes_email else { return Ok((commits, None)) };
+  if !commits.iter().any(|c| c.email == email) {
+    return Ok((commits, None));
+  }
+  let mut text = None;
+  for c in commits.iter().rev().filter(|c| c.email == email) {
+    // `sha^` can fail only for a parentless commit in the range (disjoint
+    // histories in two-dot mode); such a commit is not a notes commit.
+    let touched = git::changed_paths(repo, &format!("{}^", c.sha), &c.sha).unwrap_or_default();
+    if !touched.iter().any(|p| p == NOTES_DESCRIPTION_PATH) {
+      continue;
+    }
+    let blobs = git::tree_blobs(repo, &c.sha, &[NOTES_DESCRIPTION_PATH.to_string()])?;
+    if let Some(id) = blobs.get(NOTES_DESCRIPTION_PATH) {
+      text = git::blob_text(repo, id, MAX_SNAPSHOT_BLOB_BYTES)?;
+      if text.is_some() {
+        break;
+      }
+    }
+  }
+  let Some(text) = text else { return Ok((commits, None)) };
+  let (notes, code): (Vec<_>, Vec<_>) = commits.into_iter().partition(|c| c.email == email);
+  let description = NotesFile {
+    path: NOTES_DESCRIPTION_PATH.to_string(),
+    text,
+    commits: notes.iter().map(|c| c.sha.clone()).collect(),
+  };
+  Ok((code, Some(description)))
+}
+
 /// Extract [`PackOptions`]'s diff from git into the typed document: resolve
-/// the refs, diff, list the commits, and (for multi-commit ranges) snapshot
+/// the refs, diff, list the commits, lift the notes commits' description
+/// per the notes-commit convention, and (for multi-commit ranges) snapshot
 /// file contents at every commit boundary for the page's range filter.
 pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Result<DiffDocument, Error> {
   progress.stage(Stage::Resolve, 2);
@@ -141,15 +211,23 @@ pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Re
   let lo = if opts.merge_base { git::merge_base(&opts.repo, &base_sha, &head_sha)? } else { base_sha.clone() };
   progress.step("");
   progress.stage(Stage::Diff, 1);
-  let files = packdiff_dto::diff::parse_unified_diff(&git::diff_text(&opts.repo, &lo, &head_sha, opts.context)?);
+  let mut files = packdiff_dto::diff::parse_unified_diff(&git::diff_text(&opts.repo, &lo, &head_sha, opts.context)?);
   progress.step("");
   progress.stage(Stage::Commits, 1);
   let commits = git::commits(&opts.repo, &lo, &head_sha)?;
   progress.step("");
+  let (commits, description) = split_notes(&opts.repo, commits, opts.notes_email.as_deref())?;
+  // The lifted description leaves the diff entirely: its file drops out of
+  // the file list (and so out of the +/− totals), and out of the snapshot
+  // paths below — the page shows it as its own panel instead.
+  if let Some(d) = &description {
+    files.retain(|f| f.old_path.as_deref() != Some(d.path.as_str()) && f.new_path.as_deref() != Some(d.path.as_str()));
+  }
+  let exclude = description.as_ref().map(|d| d.path.as_str());
   // collect_snapshots drives the Scan and Snapshots stages itself: each is
   // entered with its full item count already known. A range of fewer than
   // two commits skips both stages entirely (nothing to filter).
-  let snapshots = collect_snapshots(&opts.repo, &lo, &commits, progress)?;
+  let snapshots = collect_snapshots(&opts.repo, &lo, &commits, exclude, progress)?;
   Ok(DiffDocument::new(
     git::repo_name(&opts.repo)?,
     RefInfo { name: opts.base.clone(), sha: base_sha },
@@ -159,7 +237,7 @@ pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Re
     commits,
     files,
     snapshots,
-    None,
+    description,
   ))
 }
 
