@@ -267,6 +267,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <span class="nav-spacer"></span>
 <button id="view-toggle" type="button" disabled>Side-by-side</button>
 </nav>
+<div id="toast" hidden></div>
 "##,
         title = esc(&page_title),
         base = esc(&doc.base.name),
@@ -456,6 +457,13 @@ button.md-toggle:hover { border-color:var(--accent); }
 .md-preview p, .comment-body p { margin:6px 0; }
 #storage-warning, #wasm-error { display:none; color:#cf222e; font-size:12px; }
 .hint { font-size:12px; color:var(--muted); }
+/* Fixed overlay, so showing a message never shifts the page layout. */
+#toast { position:fixed; top:calc(var(--nav-h) + 10px); left:50%; transform:translateX(-50%);
+  z-index:30; max-width:min(640px, 90vw); background:var(--panel); color:var(--fg);
+  border:1px solid var(--border); border-radius:8px; padding:8px 14px; font-size:13px;
+  cursor:pointer; box-shadow:0 4px 12px rgba(0,0,0,.25); }
+#toast.error { background:var(--del-bg); border-color:#cf222e; }
+#toast[hidden] { display:none; }
 "##;
 
 // The page's JavaScript is a VIEW LAYER ONLY. Every read of stored state goes
@@ -507,6 +515,22 @@ const JS: &str = r##"
   }
 
   const KEY = callWasm('pd_storage_key', META);
+
+  // ---- toast ----
+  // Messages surface in a fixed overlay pinned under the nav: showing one
+  // never shifts the page layout (unlike alert(), which also steals focus
+  // and blocks the page). Click to dismiss; it hides itself after a while.
+  let toastTimer = 0;
+  function showToast(message, isError) {
+    const el = document.getElementById('toast');
+    el.textContent = message;
+    el.classList.toggle('error', !!isError);
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; }, 8000);
+  }
+  function showError(message) { showToast(message, true); }
+  document.getElementById('toast').addEventListener('click', (ev) => { ev.currentTarget.hidden = true; });
 
   // ---- storage (localStorage with in-memory fallback) ----
   let doc = null;          // current ReviewDocument object (owned by wasm ops)
@@ -655,7 +679,7 @@ const JS: &str = r##"
       try {
         saveDoc(callWasm('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(comment)));
       } catch (e) {
-        alert('Comment rejected: ' + e.message);
+        showError('Comment rejected: ' + e.message);
       }
     }
     save.addEventListener('click', doSave);
@@ -784,7 +808,7 @@ const JS: &str = r##"
       files = callWasm('pd_range_diff', SNAPSHOTS,
         JSON.stringify({ from: rangeFrom - 1, to: rangeTo, context: 3 }));
     } catch (e) {
-      alert('Range diff failed: ' + e.message);
+      showError('Range diff failed: ' + e.message);
       return;
     }
     rangedFiles.textContent = '';
@@ -999,7 +1023,7 @@ const JS: &str = r##"
       try {
         saveDoc(callWasm('pd_merge', JSON.stringify(doc), String(reader.result)));
       } catch (e) {
-        alert('Import failed: ' + e.message);
+        showError('Import failed: ' + e.message);
       }
       ev.target.value = '';
     };
