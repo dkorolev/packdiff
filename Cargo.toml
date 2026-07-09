@@ -3,7 +3,7 @@ resolver = "2"
 members = ["dto", "wasm", "cli"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 # Minimum supported Rust: `u64::div_ceil` (1.73) is the newest API used;
 # verified by building the whole workspace with this exact toolchain.
@@ -24,7 +24,7 @@ thiserror = "2.0"
 # crate depends on (cargo strips the path when publishing). Bump this in
 # lockstep with `workspace.package.version` above (or let `cargo release` do
 # both) — see PUBLISHING.md.
-packdiff-dto = { path = "dto", version = "0.2.0" }
+packdiff-dto = { path = "dto", version = "0.2.1" }
 
 # Size-tuned release profile: the wasm module ships base64-inlined in every
 # generated HTML page, so every byte counts.
