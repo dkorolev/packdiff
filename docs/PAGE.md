@@ -30,7 +30,7 @@ Sub-range diffs are computed inside the page: the file contents at every commit 
 
 ## Commenting
 
-1. **Click any diff line's code cell** (added, deleted, or context — the row highlights on hover). An editor opens under the line.
+1. **Click any diff line's code cell** (added, deleted, or context — the row highlights on hover). An editor opens under the line. In a markdown file's **Preview**, click a rendered block instead: the comment anchors to the source line the block starts at (context/added blocks to the `New` side, removed blocks to `Old`), and cards follow the active view when you flip the Preview | Diff pill.
 2. Type; **Ctrl/Cmd+Enter** saves, **Escape** or *Cancel* discards. Empty text is discarded. Comment text is **markdown** (the subset below); the editor shows raw text, saved cards show it rendered. Exports carry the raw markdown, never HTML.
 3. Saved comments appear as a card under the line with the anchor (`file · side line N · timestamp`) and **Edit** / **Delete** buttons.
 4. The header counter tracks the total.

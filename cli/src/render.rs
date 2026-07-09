@@ -80,6 +80,11 @@ fn is_markdown_path(path: &str) -> bool {
 /// markers; added files show the whole file. Multi-line markdown constructs
 /// that straddle a change boundary render as separate blocks — inherent to
 /// rendering a diff, not a bug.
+///
+/// Every rendered top-level block carries the comment anchor of the source
+/// line it starts at (context and added lines anchor to the `New` side,
+/// removed lines to `Old`), so commenting works in the preview too — the
+/// same `(file, side, line)` coordinates as the diff table rows.
 fn render_markdown_preview(f: &FileDiff) -> String {
   #[derive(PartialEq, Clone, Copy)]
   enum Run {
@@ -87,35 +92,44 @@ fn render_markdown_preview(f: &FileDiff) -> String {
     Add,
     Del,
   }
+  let anchor = esc(f.anchor_path());
   let mut chunks: Vec<String> = Vec::new();
   for (i, hunk) in f.hunks.iter().enumerate() {
     if i > 0 {
       chunks.push(r#"<div class="md-gap">⋯</div>"#.to_string());
     }
-    let mut runs: Vec<(Run, Vec<&str>)> = Vec::new();
+    let mut runs: Vec<(Run, Vec<(u32, &str)>)> = Vec::new();
     for line in &hunk.lines {
-      let (kind, text) = match line {
-        Line::Ctx { text, .. } => (Run::Ctx, text.as_str()),
-        Line::Add { text, .. } => (Run::Add, text.as_str()),
-        Line::Del { text, .. } => (Run::Del, text.as_str()),
+      let (kind, no, text) = match line {
+        Line::Ctx { new, text, .. } => (Run::Ctx, *new, text.as_str()),
+        Line::Add { new, text } => (Run::Add, *new, text.as_str()),
+        Line::Del { old, text } => (Run::Del, *old, text.as_str()),
         Line::Meta { .. } => continue,
       };
       match runs.last_mut() {
-        Some((k, lines)) if *k == kind => lines.push(text),
-        _ => runs.push((kind, vec![text])),
+        Some((k, lines)) if *k == kind => lines.push((no, text)),
+        _ => runs.push((kind, vec![(no, text)])),
       }
     }
     for (kind, lines) in runs {
-      let html = markdown::to_html(&lines.join("\n"));
-      if html.is_empty() {
+      let text: Vec<&str> = lines.iter().map(|(_, t)| *t).collect();
+      let blocks = markdown::to_html_blocks(&text.join("\n"));
+      if blocks.is_empty() {
         continue;
       }
-      let class = match kind {
-        Run::Ctx => "md-run",
-        Run::Add => "md-run md-run-add",
-        Run::Del => "md-run md-run-del",
+      let (class, side) = match kind {
+        Run::Ctx => ("md-run", "New"),
+        Run::Add => ("md-run md-run-add", "New"),
+        Run::Del => ("md-run md-run-del", "Old"),
       };
-      chunks.push(format!(r#"<div class="{class}">{html}</div>"#));
+      let mut inner = String::new();
+      for (offset, html) in blocks {
+        inner.push_str(&format!(
+          r#"<div class="md-block" data-file="{anchor}" data-side="{side}" data-line="{line}">{html}</div>"#,
+          line = lines[offset].0,
+        ));
+      }
+      chunks.push(format!(r#"<div class="{class}">{inner}</div>"#));
     }
   }
   let note = if f.status == FileStatus::Added {
@@ -426,15 +440,24 @@ tr.comment-row td, tr.editor-row td { background:var(--comment-bg);
 .comment-body > :first-child { margin-top:0; }
 .comment-body > :last-child { margin-bottom:0; }
 .comment-meta { color:var(--muted); font-size:11px; }
-.comment-actions button, .editor-row button { margin-right:6px; margin-top:4px;
+.comment-actions button, .editor-row button, .editor-box button { margin-right:6px; margin-top:4px;
   background:var(--bg); color:var(--fg); border:1px solid var(--border);
   border-radius:6px; padding:2px 8px; font-size:12px; cursor:pointer; }
-.editor-row textarea { width:100%; min-height:70px; background:var(--bg); color:var(--fg);
+.editor-row textarea, .editor-box textarea { width:100%; min-height:70px; background:var(--bg); color:var(--fg);
   border:1px solid var(--border); border-radius:6px; padding:6px;
   font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   /* focus() scrolls the textarea into view: clear the sticky nav and file
      header above, and leave room for the Save/Cancel buttons below */
   scroll-margin:calc(var(--nav-h) + 48px) 0 96px; }
+/* Rendered markdown blocks are comment anchors, like diff rows. */
+.md-block { border-radius:4px; }
+.md-preview .md-block { cursor:pointer; }
+.md-preview .md-block:hover { outline:1px dashed var(--accent); outline-offset:2px; }
+.md-comments { margin:6px 0 10px; }
+.md-comments .comment-card, .md-comments .editor-box { background:var(--comment-bg);
+  border-left:3px solid var(--comment-border); border-radius:0 6px 6px 0;
+  padding:8px 12px; margin:4px 0;
+  font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
 #unanchored { border:1px dashed var(--comment-border); border-radius:8px;
   padding:8px 12px; margin:12px 0; background:var(--comment-bg); }
 /* Segmented pill: a vertical split with rounded ends; the active side filled. */
@@ -598,6 +621,48 @@ const JS: &str = r##"
     }
     return document.querySelector(anchorSel('tr.commentable', c));
   }
+  // The rendered-markdown home for an anchor: among the file's VISIBLE
+  // preview blocks on the same side, the one whose starting line is the
+  // closest at or above the anchor's line — the block that source line
+  // renders in. Lines above every block fall back to the side's first block.
+  function blockFor(c) {
+    const blocks = document.querySelectorAll(
+      '.md-preview:not([hidden]) .md-block[data-file="' + cssAttr(c.file) + '"]' +
+      '[data-side="' + cssAttr(c.side) + '"]');
+    let best = null;
+    for (const b of blocks) {
+      if (Number(b.dataset.line) <= Number(c.line) &&
+          (!best || Number(b.dataset.line) >= Number(best.dataset.line))) best = b;
+    }
+    return best || blocks[0] || null;
+  }
+  // The comment strip directly under a preview block (created on first use).
+  function commentsBoxAfter(block) {
+    let box = block.nextElementSibling;
+    if (!box || !box.classList.contains('md-comments')) {
+      box = document.createElement('div');
+      box.className = 'md-comments';
+      block.after(box);
+    }
+    return box;
+  }
+  function previewCardOf(id) {
+    return Array.prototype.find.call(document.querySelectorAll('.md-comments .comment-card'),
+      (el) => el.dataset.commentId === id) || null;
+  }
+  // A comment's card lives in whichever presentation of its anchor is live:
+  // a rendered preview block when the file shows Preview, the diff row
+  // otherwise. Returns false when neither exists (an unanchored comment).
+  function placeComment(c) {
+    const block = blockFor(c);
+    if (block) {
+      commentsBoxAfter(block).appendChild(commentCard(c));
+      return true;
+    }
+    const row = rowFor(c);
+    if (row) { insertCommentRow(row, c); return true; }
+    return false;
+  }
 
   // ---- rendering ----
   function updateCount() {
@@ -607,13 +672,14 @@ const JS: &str = r##"
   }
   function renderAll() {
     document.querySelectorAll('tr.comment-row').forEach((el) => el.remove());
+    // Preview cards go too, but their strips stay while an editor is inside.
+    document.querySelectorAll('.md-comments .comment-card').forEach((el) => el.remove());
+    document.querySelectorAll('.md-comments').forEach((el) => { if (!el.children.length) el.remove(); });
     const un = document.getElementById('unanchored');
     un.style.display = 'none';
     un.querySelectorAll('.comment-card').forEach((el) => el.remove());
     for (const c of doc.comments) {
-      const row = rowFor(c);
-      if (row) insertCommentRow(row, c);
-      else un.appendChild(commentCard(c));
+      if (!placeComment(c)) un.appendChild(commentCard(c));
     }
     if (un.querySelector('.comment-card')) un.style.display = 'block';
     updateCount();
@@ -636,10 +702,7 @@ const JS: &str = r##"
     actions.className = 'comment-actions';
     const edit = document.createElement('button');
     edit.textContent = 'Edit';
-    edit.addEventListener('click', () => {
-      const row = rowFor(c);
-      if (row) openEditor(row, { file: c.file, side: c.side, line: c.line }, c);
-    });
+    edit.addEventListener('click', () => openEditorFor(c));
     const del = document.createElement('button');
     del.textContent = 'Delete';
     del.addEventListener('click', () => {
@@ -688,10 +751,11 @@ const JS: &str = r##"
   function removeCommentDom(id) {
     const row = commentRowOf(id);
     if (row) row.remove();
-    const un = document.getElementById('unanchored');
-    un.querySelectorAll('.comment-card').forEach((el) => {
+    document.querySelectorAll('.md-comments .comment-card, #unanchored .comment-card').forEach((el) => {
       if (el.dataset.commentId === id) el.remove();
     });
+    document.querySelectorAll('.md-comments').forEach((el) => { if (!el.children.length) el.remove(); });
+    const un = document.getElementById('unanchored');
     if (!un.querySelector('.comment-card')) un.style.display = 'none';
   }
 
@@ -701,39 +765,45 @@ const JS: &str = r##"
   // diff. Save, Cancel, and Escape act on their own editor only, a rejected
   // save keeps the draft as typed, and every change lands as a surgical DOM
   // update — the page never rebuilds under the cursor, so it never jumps.
-  function closeEditor(tr) {
-    if (tr.dataset.editing) {
-      const row = commentRowOf(tr.dataset.editing);
+  // An editor hosts in whichever presentation was clicked: a table row
+  // (tr.editor-row) in the diff, a card-like div (div.editor-box) in a
+  // rendered markdown preview. Both carry the class `pd-editor` plus the
+  // anchor in data attributes.
+  function closeEditor(host) {
+    if (host.dataset.editing) {
+      const row = commentRowOf(host.dataset.editing);
       if (row) row.style.display = '';
+      const card = previewCardOf(host.dataset.editing);
+      if (card) card.style.display = '';
     }
-    tr.remove();
+    const box = host.parentElement;
+    host.remove();
+    if (box && box.classList.contains('md-comments') && !box.children.length) box.remove();
   }
   function closeEditors() {
-    document.querySelectorAll('tr.editor-row').forEach((el) => closeEditor(el));
+    document.querySelectorAll('.pd-editor').forEach((el) => closeEditor(el));
   }
   function findEditor(anchor, editingId) {
-    return Array.prototype.find.call(document.querySelectorAll('tr.editor-row'), (tr) =>
-      tr.dataset.file === anchor.file && tr.dataset.side === anchor.side &&
-      tr.dataset.line === String(anchor.line) &&
-      (tr.dataset.editing || '') === (editingId || '')) || null;
+    return Array.prototype.find.call(document.querySelectorAll('.pd-editor'), (el) =>
+      el.dataset.file === anchor.file && el.dataset.side === anchor.side &&
+      el.dataset.line === String(anchor.line) &&
+      (el.dataset.editing || '') === (editingId || '')) || null;
   }
-  // openEditor(afterRow, anchor, existing): `anchor` is { file, side, line }
-  // resolved from whichever view was clicked, so a new comment carries the
-  // right coordinates regardless of unified vs side-by-side. A new-comment
-  // editor opens below the anchor's existing comments; editing an existing
-  // comment swaps the editor in where its card is. Re-opening an anchor's
-  // editor focuses it instead of stacking a duplicate.
-  function openEditor(afterRow, anchor, existing) {
+  // Re-opening an anchor's editor focuses it instead of stacking a duplicate.
+  function focusExisting(anchor, existing) {
     const open = findEditor(anchor, existing ? existing.id : null);
-    if (open) { open.querySelector('textarea').focus(); return; }
-    const tr = document.createElement('tr');
-    tr.className = 'editor-row';
-    tr.dataset.file = anchor.file;
-    tr.dataset.side = anchor.side;
-    tr.dataset.line = String(anchor.line);
-    if (existing) tr.dataset.editing = existing.id;
-    const td = document.createElement('td');
-    td.colSpan = afterRow.cells ? afterRow.cells.length : 3;
+    if (open) { open.querySelector('textarea').focus(); return true; }
+    return false;
+  }
+  // The editor body (textarea + Save/Cancel) inside `parent`, wired to
+  // upsert `anchor` and to land the saved comment as a surgical DOM change
+  // at whichever presentation of the anchor is then live.
+  function buildEditor(host, parent, anchor, existing) {
+    host.classList.add('pd-editor');
+    host.dataset.file = anchor.file;
+    host.dataset.side = anchor.side;
+    host.dataset.line = String(anchor.line);
+    if (existing) host.dataset.editing = existing.id;
     const ta = document.createElement('textarea');
     ta.placeholder = 'Leave a comment… (markdown supported, Ctrl/Cmd+Enter to save)';
     if (existing) ta.value = existing.text;
@@ -743,7 +813,7 @@ const JS: &str = r##"
     cancel.textContent = 'Cancel';
     function doSave() {
       const text = ta.value.trim();
-      if (!text) { closeEditor(tr); return; }
+      if (!text) { closeEditor(host); return; }
       const now = new Date().toISOString();
       const comment = existing
         ? Object.assign({}, existing, { text: text, updated_at: now })
@@ -758,24 +828,31 @@ const JS: &str = r##"
         return;
       }
       persist(next);
-      if (existing) {
-        const row = commentRowOf(existing.id);
-        if (row) row.cells[0].replaceChildren(commentCard(comment));
-        closeEditor(tr);
-      } else {
-        tr.replaceWith(buildCommentRow(comment, td.colSpan));
-      }
+      if (existing) removeCommentDom(existing.id);
+      closeEditor(host);
+      placeComment(comment);
     }
     save.addEventListener('click', doSave);
-    cancel.addEventListener('click', () => closeEditor(tr));
+    cancel.addEventListener('click', () => closeEditor(host));
     ta.addEventListener('keydown', (ev) => {
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') doSave();
-      if (ev.key === 'Escape') closeEditor(tr);
+      if (ev.key === 'Escape') closeEditor(host);
     });
-    td.appendChild(ta);
-    td.appendChild(save);
-    td.appendChild(cancel);
+    parent.appendChild(ta);
+    parent.appendChild(save);
+    parent.appendChild(cancel);
+    return ta;
+  }
+  // Diff-table editor: a row under the anchor's comments (new comment) or
+  // swapped in where the comment's card row is (editing).
+  function openTableEditor(afterRow, anchor, existing) {
+    if (focusExisting(anchor, existing)) return;
+    const tr = document.createElement('tr');
+    tr.className = 'editor-row';
+    const td = document.createElement('td');
+    td.colSpan = afterRow.cells ? afterRow.cells.length : 3;
     tr.appendChild(td);
+    const ta = buildEditor(tr, td, anchor, existing);
     if (existing) {
       const row = commentRowOf(existing.id);
       if (!row) return;
@@ -785,6 +862,30 @@ const JS: &str = r##"
       afterComments(afterRow).after(tr);
     }
     ta.focus();
+  }
+  // Preview editor: a card-like box in the block's comment strip (new
+  // comment) or swapped in where the comment's card is (editing).
+  function openPreviewEditor(block, anchor, existing) {
+    if (focusExisting(anchor, existing)) return;
+    const div = document.createElement('div');
+    div.className = 'editor-box';
+    const ta = buildEditor(div, div, anchor, existing);
+    if (existing) {
+      const card = previewCardOf(existing.id);
+      if (!card) return;
+      card.style.display = 'none';
+      card.after(div);
+    } else {
+      commentsBoxAfter(block).appendChild(div);
+    }
+    ta.focus();
+  }
+  // Edit `c` wherever its card currently lives.
+  function openEditorFor(c) {
+    const anchor = { file: c.file, side: c.side, line: c.line };
+    if (previewCardOf(c.id)) { openPreviewEditor(null, anchor, c); return; }
+    const row = rowFor(c);
+    if (row) openTableEditor(row, anchor, c);
   }
 
   // The anchor may sit on the clicked cell (side-by-side) or on its row
@@ -812,7 +913,17 @@ const JS: &str = r##"
       }
       return;
     }
-    openEditor(cell.parentElement, anchor, null);
+    openTableEditor(cell.parentElement, anchor, null);
+  });
+
+  // Rendered markdown blocks are comment anchors too: a click opens the
+  // editor in the preview, pinned to the block's starting source line.
+  document.addEventListener('click', (ev) => {
+    const block = ev.target.closest('.md-preview .md-block');
+    if (!block) return;
+    if (ev.target.closest('a')) return; // links inside rendered markdown stay links
+    openPreviewEditor(block,
+      { file: block.dataset.file, side: block.dataset.side, line: block.dataset.line }, null);
   });
 
   // ---- the Preview | Diff pill for .md files (pure view state) ----
@@ -825,10 +936,14 @@ const JS: &str = r##"
     const preview = file.querySelector('.md-preview');
     if (!wrap || !preview) return;
     const showPreview = btn.dataset.mdview === 'preview';
+    const drafts = captureDrafts();
+    closeEditors();
     preview.hidden = !showPreview;
     wrap.hidden = showPreview;
     btn.closest('.md-seg').querySelectorAll('button').forEach((b) =>
       b.classList.toggle('active', b === btn));
+    renderAll(); // re-home comment cards into the now-visible presentation
+    restoreDrafts(drafts);
   });
 
   // ---- commit range filtering ----
@@ -1248,21 +1363,29 @@ const JS: &str = r##"
   // capture their drafts and reopen them on the other side instead of
   // discarding them.
   function captureDrafts() {
-    return Array.prototype.map.call(document.querySelectorAll('tr.editor-row'), (tr) => ({
-      anchor: { file: tr.dataset.file, side: tr.dataset.side, line: tr.dataset.line },
-      editing: tr.dataset.editing || null,
-      text: tr.querySelector('textarea').value,
+    return Array.prototype.map.call(document.querySelectorAll('.pd-editor'), (el) => ({
+      anchor: { file: el.dataset.file, side: el.dataset.side, line: el.dataset.line },
+      editing: el.dataset.editing || null,
+      text: el.querySelector('textarea').value,
     }));
   }
   function restoreDrafts(drafts) {
     for (const d of drafts) {
-      const row = rowFor(d.anchor);
-      if (!row) continue;
       const existing = d.editing ? doc.comments.find((c) => c.id === d.editing) : null;
       if (d.editing && !existing) continue;
-      openEditor(row, d.anchor, existing);
-      const tr = findEditor(d.anchor, d.editing);
-      if (tr) tr.querySelector('textarea').value = d.text;
+      if (existing) {
+        openEditorFor(existing);
+      } else {
+        const block = blockFor(d.anchor);
+        if (block) {
+          openPreviewEditor(block, d.anchor, null);
+        } else {
+          const row = rowFor(d.anchor);
+          if (row) openTableEditor(row, d.anchor, null);
+        }
+      }
+      const el = findEditor(d.anchor, d.editing);
+      if (el) el.querySelector('textarea').value = d.text;
     }
   }
   function applyDiffView() {
