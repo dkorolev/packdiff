@@ -128,8 +128,8 @@ fn end_to_end() {
   assert!(html.contains("Binary file — contents not shown."));
   assert!(html.contains("feature change one"));
   // Exactly one markdown file in the fixture (newfile.md) → exactly one
-  // rendered-view toggle and one server-rendered preview.
-  assert_eq!(html.matches(r#"class="md-toggle""#).count(), 1);
+  // Preview | Diff pill and one server-rendered preview.
+  assert_eq!(html.matches(r#"class="seg md-seg""#).count(), 1);
   assert_eq!(html.matches(r#"class="md-preview""#).count(), 1);
   assert!(html.contains("<h1>New</h1>"), "the markdown preview is rendered at build time");
   assert!(html.contains(r#"class="md-run md-run-add""#), "added markdown renders tinted green");

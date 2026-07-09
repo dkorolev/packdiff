@@ -161,8 +161,12 @@ fn render_file(index: usize, f: &FileDiff) -> String {
   let notes: String = f.notes.iter().map(|n| format!(r#"<div class="muted note">{}</div>"#, esc(n))).collect();
   let renderable_markdown =
     is_markdown_path(f.anchor_path()) && !f.binary && f.status != FileStatus::Deleted && !f.hunks.is_empty();
-  let toggle =
-    if renderable_markdown { r#"<button class="md-toggle" type="button">View rendered</button>"# } else { "" };
+  // A two-sided segmented pill: both views visible, the active side filled.
+  let toggle = if renderable_markdown {
+    r#"<span class="seg md-seg"><button type="button" data-mdview="preview">Preview</button><button type="button" data-mdview="diff" class="active">Diff</button></span>"#
+  } else {
+    ""
+  };
   let body = if f.binary {
     r#"<p class="muted">Binary file — contents not shown.</p>"#.to_string()
   } else if f.hunks.is_empty() {
@@ -433,10 +437,15 @@ tr.comment-row td, tr.editor-row td { background:var(--comment-bg);
   scroll-margin:calc(var(--nav-h) + 48px) 0 96px; }
 #unanchored { border:1px dashed var(--comment-border); border-radius:8px;
   padding:8px 12px; margin:12px 0; background:var(--comment-bg); }
-button.md-toggle { background:var(--bg); color:var(--fg); border:1px solid var(--border);
-  border-radius:6px; padding:1px 8px; margin-right:12px; font-size:11px; cursor:pointer;
+/* Segmented pill: a vertical split with rounded ends; the active side filled. */
+.seg { display:inline-flex; border:1px solid var(--border); border-radius:999px;
+  overflow:hidden; vertical-align:middle; margin-right:12px;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-button.md-toggle:hover { border-color:var(--accent); }
+.seg button { background:var(--panel); color:var(--muted); border:none;
+  padding:1px 10px; font-size:11px; cursor:pointer; font-family:inherit; }
+.seg button + button { border-left:1px solid var(--border); }
+.seg button.active { background:var(--bg); color:var(--fg); font-weight:600; }
+.seg button:hover:not(.active) { color:var(--fg); }
 .md-preview { padding:4px 16px 12px;
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
 .md-gap { color:var(--muted); text-align:center; border-top:1px dashed var(--border);
@@ -806,19 +815,20 @@ const JS: &str = r##"
     openEditor(cell.parentElement, anchor, null);
   });
 
-  // ---- rendered-markdown toggle for .md files (pure view state) ----
+  // ---- the Preview | Diff pill for .md files (pure view state) ----
   document.addEventListener('click', (ev) => {
-    const btn = ev.target.closest('button.md-toggle');
+    const btn = ev.target.closest('.md-seg button');
     if (!btn) return;
-    ev.preventDefault(); // the button lives inside <summary>: do not fold the panel
+    ev.preventDefault(); // the pill lives inside <summary>: do not fold the panel
     const file = btn.closest('details.file');
     const wrap = file.querySelector('.diff-wrap');
     const preview = file.querySelector('.md-preview');
     if (!wrap || !preview) return;
-    const showRendered = preview.hidden;
-    preview.hidden = !showRendered;
-    wrap.hidden = showRendered;
-    btn.textContent = showRendered ? 'View diff' : 'View rendered';
+    const showPreview = btn.dataset.mdview === 'preview';
+    preview.hidden = !showPreview;
+    wrap.hidden = showPreview;
+    btn.closest('.md-seg').querySelectorAll('button').forEach((b) =>
+      b.classList.toggle('active', b === btn));
   });
 
   // ---- commit range filtering ----
