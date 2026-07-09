@@ -267,10 +267,9 @@ impl Progress {
     self.state.lock().expect("no thread panics while holding this lock")
   }
 
-  /// Enter a stage with the number of work items known up front (extend
-  /// later with [`Progress::add_work`]). Machine mode reports stage changes
-  /// immediately (they are sparse), so even sub-second runs stream one line
-  /// per stage.
+  /// Enter a stage with the number of work items known up front. Machine
+  /// mode reports stage changes immediately (they are sparse), so even
+  /// sub-second runs stream one line per stage.
   pub fn stage(&self, stage: Stage, known_items: u64) {
     let mut s = self.locked();
     s.stage = stage;
