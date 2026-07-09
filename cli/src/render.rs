@@ -142,6 +142,24 @@ fn render_markdown_preview(f: &FileDiff) -> String {
   format!(r#"<div class="md-preview">{note}{}</div>"#, chunks.join(""))
 }
 
+/// The lifted PR description as a page panel: rendered markdown whose
+/// top-level blocks carry comment anchors — `(path, New, 1-based line)` —
+/// exactly like the file previews, so the page JS needs nothing new for
+/// commenting here. A "fake file": not part of the reviewed diff.
+fn render_description(d: &packdiff_dto::diff::NotesFile) -> String {
+  let anchor = esc(&d.path);
+  let mut blocks = String::new();
+  for (offset, html) in markdown::to_html_blocks(&d.text) {
+    blocks.push_str(&format!(
+      r#"<div class="md-block" data-file="{anchor}" data-side="New" data-line="{line}">{html}</div>"#,
+      line = offset + 1,
+    ));
+  }
+  format!(
+    r#"<div class="hint">Committed as <code>{anchor}</code> by the notes author; not part of the reviewed diff. Click a block to comment.</div><div class="md-preview">{blocks}</div>"#
+  )
+}
+
 /// The status badge shown before a file's name; empty for a plain edit.
 fn status_badge(status: FileStatus) -> &'static str {
   match status {
@@ -286,7 +304,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 </div>
 </header>
 <nav id="topnav">
-<a href="#commits">Commits <span class="count" id="nav-commits">{ncommits}</span></a>
+{desc_link}<a href="#commits">Commits <span class="count" id="nav-commits">{ncommits}</span></a>
 <a href="#files">Files changed <span class="count" id="nav-files">{nfiles}</span></a>
 <a href="#diff">Diff <span class="count" id="nav-diff"><span class="adds">+{adds}</span> <span class="dels">−{dels}</span></span></a>
 <span class="nav-spacer"></span>
@@ -302,6 +320,8 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
         mb = esc(&short(&doc.merge_base)),
         gen = esc(&doc.generated_at),
         tool = esc(&format!("{} v{}", doc.tool, env!("CARGO_PKG_VERSION"))),
+        desc_link =
+          if doc.description.is_some() { "<a href=\"#description\">Description</a>\n" } else { "" },
         ncommits = doc.commits.len(),
         nfiles = doc.files.len(),
         adds = doc.additions(),
@@ -312,6 +332,11 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
         r#"<div id="unanchored" style="display:none"><strong>Unanchored comments</strong> <span class="muted">(their diff lines are not in this rendering — e.g. regenerated with different context)</span></div>
 "#,
     );
+  if let Some(d) = &doc.description {
+    page.push_str("<section id=\"description\"><h2>Description</h2>");
+    page.push_str(&render_description(d));
+    page.push_str("</section>\n");
+  }
   page.push_str("<section id=\"commits\"><h2>Commits</h2>");
   page.push_str(&render_commits(doc));
   page.push_str("</section>\n");
