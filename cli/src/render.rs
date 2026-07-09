@@ -61,7 +61,7 @@ fn render_commits(doc: &DiffDocument) -> String {
   out.push_str("</table>");
   if doc.snapshots.is_some() {
     out.push_str(
-      r#"<div id="range-bar" hidden><span id="range-label"></span> <button id="range-reset" type="button">Show full diff</button></div>"#,
+      r#"<div id="range-bar" hidden><span id="range-label"></span> <span class="muted">— read-only; comments attach to the full diff</span> <button id="range-reset" type="button">Show full diff</button></div>"#,
     );
   }
   out
@@ -795,7 +795,14 @@ const JS: &str = r##"
     const cell = ev.target.closest('td.code');
     if (!cell) return;
     const anchor = anchorOf(cell);
-    if (!anchor) return;
+    if (!anchor) {
+      // Range panels carry no comment anchors on purpose (comments key to
+      // the full diff): say so instead of silently swallowing the click.
+      if (cell.closest('#files-range')) {
+        showToast('The range view is read-only — comments attach to the full diff. Click “Show full diff” to comment.');
+      }
+      return;
+    }
     openEditor(cell.parentElement, anchor, null);
   });
 
