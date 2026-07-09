@@ -43,7 +43,7 @@ fn render_commits(doc: &DiffDocument) -> String {
   let mut out = String::new();
   if doc.snapshots.is_some() {
     out.push_str(
-      r#"<div class="hint">Click a commit to see only its diff; click a second commit to select the range between them (or shift-click to extend). Click again to reset. Commenting works on the full diff only.</div>"#,
+      r#"<div class="hint">Click a commit to see only its diff — click another to move the selection, shift-click to select a range, click the selected commit to show the full diff. Commenting works on the full diff only.</div>"#,
     );
   }
   out.push_str(r#"<table class="commits">"#);
@@ -832,21 +832,25 @@ const JS: &str = r##"
     const row = ev.target.closest('tr.commit.selectable');
     if (!row || !SNAPSHOTS) return;
     const idx = Number(row.dataset.index);
-    const single = rangeFrom !== null && rangeFrom === rangeTo;
+    // One predictable grammar: a plain click selects exactly that commit
+    // (moving any previous selection), shift-click spans the range from the
+    // selection to the clicked commit, and clicking the sole selected commit
+    // deselects. The same gesture always means the same thing.
     if (ev.shiftKey && rangeFrom !== null) {
-      // Shift-click extends the current selection's span to include idx.
       rangeFrom = Math.min(rangeFrom, idx);
       rangeTo = Math.max(rangeTo, idx);
     } else if (rangeFrom === idx && rangeTo === idx) {
-      rangeFrom = rangeTo = null; // clicking the sole selected commit deselects
-    } else if (single) {
-      // A single commit is selected; a plain click on another spans the range.
-      rangeFrom = Math.min(rangeFrom, idx);
-      rangeTo = Math.max(rangeTo, idx);
+      rangeFrom = rangeTo = null;
     } else {
-      rangeFrom = rangeTo = idx; // no selection, or a range was selected: (re)start at idx
+      rangeFrom = rangeTo = idx;
     }
     applyRange();
+  });
+  // Shift-click means "span the range": suppress the browser's shift-click
+  // text selection on commit rows so the gesture reads as selection, not as
+  // smearing highlighted text across the table.
+  document.addEventListener('mousedown', (ev) => {
+    if (ev.shiftKey && ev.target.closest('tr.commit.selectable')) ev.preventDefault();
   });
   const rangeReset = document.getElementById('range-reset');
   if (rangeReset) rangeReset.addEventListener('click', () => {
