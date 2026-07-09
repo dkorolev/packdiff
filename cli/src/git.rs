@@ -28,8 +28,11 @@ pub static VERBOSE: AtomicBool = AtomicBool::new(false);
 
 /// Everything that can go wrong in the CLI, with enough structure that exit
 /// codes, `stage` classification, and machine-readable variants all derive
-/// from the same value. See `help exitcodes`.
+/// from the same value. See `help exitcodes`. Re-exported as the library's
+/// [`crate::Error`]; `#[non_exhaustive]` because new failure modes may be
+/// added without a breaking release.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CliError {
   /// The invocation itself was malformed (exit 2, stage `usage`).
   #[error("{message}")]
