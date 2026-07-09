@@ -427,7 +427,10 @@ tr.comment-row td, tr.editor-row td { background:var(--comment-bg);
   border-radius:6px; padding:2px 8px; font-size:12px; cursor:pointer; }
 .editor-row textarea { width:100%; min-height:70px; background:var(--bg); color:var(--fg);
   border:1px solid var(--border); border-radius:6px; padding:6px;
-  font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  /* focus() scrolls the textarea into view: clear the sticky nav and file
+     header above, and leave room for the Save/Cancel buttons below */
+  scroll-margin:calc(var(--nav-h) + 48px) 0 96px; }
 #unanchored { border:1px dashed var(--comment-border); border-radius:8px;
   padding:8px 12px; margin:12px 0; background:var(--comment-bg); }
 button.md-toggle { background:var(--bg); color:var(--fg); border:1px solid var(--border);
@@ -549,12 +552,20 @@ const JS: &str = r##"
     }
     return callWasm('pd_new_document', META);
   }
-  function saveDoc(next) {
+  // Persist a new document state. The comment DOM is NOT rebuilt: callers
+  // apply the matching surgical change themselves, so saving never makes the
+  // page jump. saveDoc is the whole-page variant for bulk transitions
+  // (import, view toggle) where rebuilding is the point.
+  function persist(next) {
     doc = next;
     if (!memoryOnly) {
       try { localStorage.setItem(KEY, JSON.stringify(doc)); }
       catch (e) { showStorageWarning(); }
     }
+    updateCount();
+  }
+  function saveDoc(next) {
+    persist(next);
     renderAll();
   }
   function genId() {
@@ -580,26 +591,29 @@ const JS: &str = r##"
   }
 
   // ---- rendering ----
+  function updateCount() {
+    const n = doc.comments.length;
+    document.getElementById('comment-count').textContent =
+      n + ' comment' + (n === 1 ? '' : 's');
+  }
   function renderAll() {
     document.querySelectorAll('tr.comment-row').forEach((el) => el.remove());
     const un = document.getElementById('unanchored');
     un.style.display = 'none';
     un.querySelectorAll('.comment-card').forEach((el) => el.remove());
-    let unanchored = 0;
     for (const c of doc.comments) {
       const row = rowFor(c);
       if (row) insertCommentRow(row, c);
-      else { unanchored += 1; un.appendChild(commentCard(c)); }
+      else un.appendChild(commentCard(c));
     }
-    if (unanchored > 0) un.style.display = 'block';
-    const n = doc.comments.length;
-    document.getElementById('comment-count').textContent =
-      n + ' comment' + (n === 1 ? '' : 's');
+    if (un.querySelector('.comment-card')) un.style.display = 'block';
+    updateCount();
   }
 
   function commentCard(c) {
     const wrap = document.createElement('div');
     wrap.className = 'comment-card';
+    wrap.dataset.commentId = c.id;
     const meta = document.createElement('div');
     meta.className = 'comment-meta';
     meta.textContent = c.file + ' · ' + c.side.toLowerCase() + ' line ' + c.line + ' · ' + c.updated_at;
@@ -620,7 +634,11 @@ const JS: &str = r##"
     const del = document.createElement('button');
     del.textContent = 'Delete';
     del.addEventListener('click', () => {
-      saveDoc(callWasm('pd_delete_comment', JSON.stringify(doc), c.id));
+      let next;
+      try { next = callWasm('pd_delete_comment', JSON.stringify(doc), c.id); }
+      catch (e) { showError('Delete failed: ' + e.message); return; }
+      persist(next);
+      removeCommentDom(c.id);
     });
     actions.appendChild(edit);
     actions.appendChild(del);
@@ -630,33 +648,81 @@ const JS: &str = r##"
     return wrap;
   }
 
-  function insertCommentRow(row, c) {
+  function buildCommentRow(c, colSpan) {
     const tr = document.createElement('tr');
     tr.className = 'comment-row';
+    tr.dataset.commentId = c.id;
     const td = document.createElement('td');
-    // Span the anchor row's own column count (3 unified, 4 side-by-side).
-    td.colSpan = row.cells ? row.cells.length : 3;
+    td.colSpan = colSpan;
     td.appendChild(commentCard(c));
     tr.appendChild(td);
+    return tr;
+  }
+  // The last of the comment rows directly following `row` (or `row` itself):
+  // where a new comment (or its editor) for `row`'s anchor belongs.
+  function afterComments(row) {
     let after = row;
     while (after.nextElementSibling &&
            after.nextElementSibling.classList.contains('comment-row')) {
       after = after.nextElementSibling;
     }
-    after.after(tr);
+    return after;
+  }
+  function insertCommentRow(row, c) {
+    // Span the anchor row's own column count (3 unified, 4 side-by-side).
+    afterComments(row).after(buildCommentRow(c, row.cells ? row.cells.length : 3));
+  }
+  function commentRowOf(id) {
+    return Array.prototype.find.call(
+      document.querySelectorAll('tr.comment-row'), (tr) => tr.dataset.commentId === id) || null;
+  }
+  function removeCommentDom(id) {
+    const row = commentRowOf(id);
+    if (row) row.remove();
+    const un = document.getElementById('unanchored');
+    un.querySelectorAll('.comment-card').forEach((el) => {
+      if (el.dataset.commentId === id) el.remove();
+    });
+    if (!un.querySelector('.comment-card')) un.style.display = 'none';
   }
 
   // ---- editor ----
+  // Editors are per-anchor and independent: opening one never closes (or
+  // silently discards) another, so a draft survives clicking around the
+  // diff. Save, Cancel, and Escape act on their own editor only, a rejected
+  // save keeps the draft as typed, and every change lands as a surgical DOM
+  // update — the page never rebuilds under the cursor, so it never jumps.
+  function closeEditor(tr) {
+    if (tr.dataset.editing) {
+      const row = commentRowOf(tr.dataset.editing);
+      if (row) row.style.display = '';
+    }
+    tr.remove();
+  }
   function closeEditors() {
-    document.querySelectorAll('tr.editor-row').forEach((el) => el.remove());
+    document.querySelectorAll('tr.editor-row').forEach((el) => closeEditor(el));
+  }
+  function findEditor(anchor, editingId) {
+    return Array.prototype.find.call(document.querySelectorAll('tr.editor-row'), (tr) =>
+      tr.dataset.file === anchor.file && tr.dataset.side === anchor.side &&
+      tr.dataset.line === String(anchor.line) &&
+      (tr.dataset.editing || '') === (editingId || '')) || null;
   }
   // openEditor(afterRow, anchor, existing): `anchor` is { file, side, line }
   // resolved from whichever view was clicked, so a new comment carries the
-  // right coordinates regardless of unified vs side-by-side.
+  // right coordinates regardless of unified vs side-by-side. A new-comment
+  // editor opens below the anchor's existing comments; editing an existing
+  // comment swaps the editor in where its card is. Re-opening an anchor's
+  // editor focuses it instead of stacking a duplicate.
   function openEditor(afterRow, anchor, existing) {
-    closeEditors();
+    const open = findEditor(anchor, existing ? existing.id : null);
+    if (open) { open.querySelector('textarea').focus(); return; }
     const tr = document.createElement('tr');
     tr.className = 'editor-row';
+    tr.dataset.file = anchor.file;
+    tr.dataset.side = anchor.side;
+    tr.dataset.line = String(anchor.line);
+    if (existing) tr.dataset.editing = existing.id;
     const td = document.createElement('td');
     td.colSpan = afterRow.cells ? afterRow.cells.length : 3;
     const ta = document.createElement('textarea');
@@ -668,31 +734,47 @@ const JS: &str = r##"
     cancel.textContent = 'Cancel';
     function doSave() {
       const text = ta.value.trim();
-      if (!text) { closeEditors(); return; }
+      if (!text) { closeEditor(tr); return; }
       const now = new Date().toISOString();
       const comment = existing
         ? Object.assign({}, existing, { text: text, updated_at: now })
         : { id: genId(), file: anchor.file, side: anchor.side,
             line: Number(anchor.line), text: text,
             created_at: now, updated_at: now };
-      closeEditors();
+      let next;
       try {
-        saveDoc(callWasm('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(comment)));
+        next = callWasm('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(comment));
       } catch (e) {
         showError('Comment rejected: ' + e.message);
+        return;
+      }
+      persist(next);
+      if (existing) {
+        const row = commentRowOf(existing.id);
+        if (row) row.cells[0].replaceChildren(commentCard(comment));
+        closeEditor(tr);
+      } else {
+        tr.replaceWith(buildCommentRow(comment, td.colSpan));
       }
     }
     save.addEventListener('click', doSave);
-    cancel.addEventListener('click', closeEditors);
+    cancel.addEventListener('click', () => closeEditor(tr));
     ta.addEventListener('keydown', (ev) => {
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') doSave();
-      if (ev.key === 'Escape') closeEditors();
+      if (ev.key === 'Escape') closeEditor(tr);
     });
     td.appendChild(ta);
     td.appendChild(save);
     td.appendChild(cancel);
     tr.appendChild(td);
-    afterRow.after(tr);
+    if (existing) {
+      const row = commentRowOf(existing.id);
+      if (!row) return;
+      row.style.display = 'none';
+      row.after(tr);
+    } else {
+      afterComments(afterRow).after(tr);
+    }
     ta.focus();
   }
 
@@ -1141,17 +1223,40 @@ const JS: &str = r##"
       if (!wrap.querySelector('table.diff.split')) wrap.appendChild(buildSplit(u));
     });
   }
+  // Swapping the live table would strand open editors in the hidden one, so
+  // capture their drafts and reopen them on the other side instead of
+  // discarding them.
+  function captureDrafts() {
+    return Array.prototype.map.call(document.querySelectorAll('tr.editor-row'), (tr) => ({
+      anchor: { file: tr.dataset.file, side: tr.dataset.side, line: tr.dataset.line },
+      editing: tr.dataset.editing || null,
+      text: tr.querySelector('textarea').value,
+    }));
+  }
+  function restoreDrafts(drafts) {
+    for (const d of drafts) {
+      const row = rowFor(d.anchor);
+      if (!row) continue;
+      const existing = d.editing ? doc.comments.find((c) => c.id === d.editing) : null;
+      if (d.editing && !existing) continue;
+      openEditor(row, d.anchor, existing);
+      const tr = findEditor(d.anchor, d.editing);
+      if (tr) tr.querySelector('textarea').value = d.text;
+    }
+  }
   function applyDiffView() {
     const split = document.body.classList.contains('view-split');
     if (split) ensureSplitBuilt();
+    const drafts = captureDrafts();
+    closeEditors();
     document.querySelectorAll('.diff-wrap').forEach((w) => {
       const u = w.querySelector('table.diff.unified');
       const s = w.querySelector('table.diff.split');
       if (u) u.style.display = split ? 'none' : '';
       if (s) s.style.display = split ? '' : 'none';
     });
-    closeEditors();
     renderAll(); // re-home comment rows into the now-visible tables
+    restoreDrafts(drafts);
   }
 
   const viewToggle = document.getElementById('view-toggle');
