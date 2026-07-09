@@ -128,9 +128,14 @@ fn end_to_end() {
   assert!(html.contains("Binary file — contents not shown."));
   assert!(html.contains("feature change one"));
   // Exactly one markdown file in the fixture (newfile.md) → exactly one
-  // Preview | Diff pill and one server-rendered preview.
+  // Preview | Diff pill and one server-rendered preview. Preview is the
+  // default: the markdown file's preview starts visible and its diff wrap
+  // starts hidden — and it is the only hidden wrap on the page.
   assert_eq!(html.matches(r#"class="seg md-seg""#).count(), 1);
   assert_eq!(html.matches(r#"class="md-preview""#).count(), 1);
+  assert!(!html.contains(r#"<div class="md-preview" hidden>"#));
+  assert_eq!(html.matches(r#"<div class="diff-wrap" hidden>"#).count(), 1);
+  assert!(html.contains(r#"data-mdview="preview" class="active""#));
   assert!(html.contains("<h1>New</h1>"), "the markdown preview is rendered at build time");
   assert!(html.contains(r#"class="md-run md-run-add""#), "added markdown renders tinted green");
   // Commit range filtering: snapshots embedded, commits selectable, one copy

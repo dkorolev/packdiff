@@ -137,7 +137,9 @@ fn render_markdown_preview(f: &FileDiff) -> String {
   } else {
     r#"<div class="muted note">Rendered from the diff hunks — green added, red removed; unchanged text outside the hunks is not included.</div>"#
   };
-  format!(r#"<div class="md-preview" hidden>{note}{}</div>"#, chunks.join(""))
+  // Preview is a markdown file's default view; the diff is one pill-click
+  // away (the page JS swaps the `hidden` attributes from then on).
+  format!(r#"<div class="md-preview">{note}{}</div>"#, chunks.join(""))
 }
 
 /// The status badge shown before a file's name; empty for a plain edit.
@@ -177,7 +179,7 @@ fn render_file(index: usize, f: &FileDiff) -> String {
     is_markdown_path(f.anchor_path()) && !f.binary && f.status != FileStatus::Deleted && !f.hunks.is_empty();
   // A two-sided segmented pill: both views visible, the active side filled.
   let toggle = if renderable_markdown {
-    r#"<span class="seg md-seg"><button type="button" data-mdview="preview">Preview</button><button type="button" data-mdview="diff" class="active">Diff</button></span>"#
+    r#"<span class="seg md-seg"><button type="button" data-mdview="preview" class="active">Preview</button><button type="button" data-mdview="diff">Diff</button></span>"#
   } else {
     ""
   };
@@ -213,8 +215,13 @@ fn render_file(index: usize, f: &FileDiff) -> String {
       }
     }
     // Wrapped so the page JS can build a side-by-side `table.diff.split`
-    // sibling and swap which one shows; the markdown toggle hides the wrap.
-    let table = format!(r#"<div class="diff-wrap"><table class="diff unified">{rows}</table></div>"#);
+    // sibling and swap which one shows; the Preview | Diff pill swaps the
+    // whole wrap against the preview. Markdown files open in Preview, so
+    // their wrap starts hidden.
+    let table = format!(
+      r#"<div class="diff-wrap"{hidden}><table class="diff unified">{rows}</table></div>"#,
+      hidden = if renderable_markdown { " hidden" } else { "" }
+    );
     if renderable_markdown {
       format!("{table}{}", render_markdown_preview(f))
     } else {
