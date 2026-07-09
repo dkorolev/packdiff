@@ -16,6 +16,14 @@
 //! The data model lives in its own pure-logic crate and is re-exported here
 //! as [`dto`], so callers need no separate version-matched `packdiff-dto`
 //! dependency.
+//!
+//! ```no_run
+//! let opts = packdiff::PackOptions::new(".", "main", "HEAD");
+//! let out = packdiff::pack(&opts, &())?; // &(): no progress reporting
+//! std::fs::write("review.html", &out.html)?;
+//! println!("{} files changed", out.document.files.len());
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 mod git;
 pub mod progress;

@@ -118,6 +118,23 @@ Humans at a terminal may use relaxed spellings (`--no-color`, bare `version`); t
 
 Exit codes: `0` success · `2` usage · `3` not a git repository · `4` unknown ref · `5` git/io failure · `130` interrupted — `packdiff help exitcodes` has the full table, and every machine-mode error carries a `stage` field.
 
+## Use as a library
+
+The binary's two halves — extract a typed diff document from git, render it into the one-file page — are the crate's public Rust API:
+
+```rust,no_run
+let opts = packdiff::PackOptions::new(".", "main", "HEAD");
+let out = packdiff::pack(&opts, &())?; // &(): no progress reporting
+std::fs::write("review.html", &out.html)?;
+```
+
+```toml
+[dependencies]
+packdiff = { version = "0.2", default-features = false }
+```
+
+`default-features = false` drops the binary-only terminal machinery (`indicatif`). The build-time wasm prerequisite above still applies, and `git` must be on `PATH` at run time. The typed data model is re-exported as `packdiff::dto`; progress can be observed by implementing `packdiff::progress::ProgressObserver` (`&()` observes nothing). `cargo run --example pack -- main` runs the [worked example](cli/examples/pack.rs), and consumers that only read packdiff's artifacts — exported comments, `--dump-json` documents — need just the pure-logic [`packdiff-dto`](dto/) crate.
+
 ## Documentation
 
 | Doc | Contents |
@@ -129,7 +146,7 @@ Exit codes: `0` success · `2` usage · `3` not a git repository · `4` unknown 
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Crate boundaries, the wasm-embedding build pipeline, testing strategy |
 | [PUBLISHING.md](PUBLISHING.md) | Maintainer playbook: crate order, version reconciliation, the dry run, releasing to crates.io |
 
-Rust API docs: `cargo doc -p packdiff-dto --open`.
+Rust API docs: `cargo doc -p packdiff -p packdiff-dto --open`.
 
 ## Tests and gates
 
