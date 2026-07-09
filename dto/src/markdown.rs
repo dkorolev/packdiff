@@ -20,6 +20,27 @@ pub fn to_html(text: &str) -> String {
   blocks_to_html(&lines, 0)
 }
 
+/// Like [`to_html`], but one entry per top-level block: `(line, html)`,
+/// where `line` is the 0-based index (within `text`) of the block's first
+/// line. Concatenating the `html` parts yields exactly `to_html(text)`.
+/// This is what lets the page anchor a comment on a rendered markdown block
+/// back to the source line the block starts at.
+pub fn to_html_blocks(text: &str) -> Vec<(usize, String)> {
+  let lines: Vec<&str> = text.lines().collect();
+  let mut out = Vec::new();
+  let mut i = 0;
+  while i < lines.len() {
+    if lines[i].trim_start().is_empty() {
+      i += 1;
+      continue;
+    }
+    let (next, html) = one_block(&lines, i, 0);
+    out.push((i, html));
+    i = next;
+  }
+  out
+}
+
 /// Recursion cap for nested blockquotes and nested inline emphasis; markdown
 /// past this depth renders as escaped literal text instead of overflowing.
 const MAX_DEPTH: u32 = 8;
@@ -47,78 +68,80 @@ fn blocks_to_html(lines: &[&str], depth: u32) -> String {
   let mut out = String::new();
   let mut i = 0;
   while i < lines.len() {
-    let trimmed = lines[i].trim_start();
-    if trimmed.is_empty() {
+    if lines[i].trim_start().is_empty() {
       i += 1;
       continue;
     }
-    if trimmed.starts_with("```") {
-      // Fenced code block; an unclosed fence runs to the end of the input.
-      let mut j = i + 1;
-      let mut code = String::new();
-      while j < lines.len() && !lines[j].trim_start().starts_with("```") {
-        code.push_str(lines[j]);
-        code.push('\n');
-        j += 1;
-      }
-      out.push_str(&format!("<pre><code>{}</code></pre>", esc(&code)));
-      i = j + 1;
-      continue;
-    }
-    if let Some((level, content)) = heading(trimmed) {
-      out.push_str(&format!("<h{level}>{}</h{level}>", inline(content, depth)));
-      i += 1;
-      continue;
-    }
-    if is_rule(trimmed) {
-      out.push_str("<hr>");
-      i += 1;
-      continue;
-    }
-    if trimmed.starts_with('>') && depth < MAX_DEPTH {
-      let mut inner: Vec<&str> = Vec::new();
-      while i < lines.len() {
-        let t = lines[i].trim_start();
-        let Some(stripped) = t.strip_prefix('>') else { break };
-        inner.push(stripped.strip_prefix(' ').unwrap_or(stripped));
-        i += 1;
-      }
-      out.push_str(&format!("<blockquote>{}</blockquote>", blocks_to_html(&inner, depth + 1)));
-      continue;
-    }
-    if unordered_item(trimmed).is_some() {
-      out.push_str("<ul>");
-      while i < lines.len() {
-        let Some(item) = unordered_item(lines[i].trim_start()) else { break };
-        out.push_str(&format!("<li>{}</li>", inline(item, depth)));
-        i += 1;
-      }
-      out.push_str("</ul>");
-      continue;
-    }
-    if ordered_item(trimmed).is_some() {
-      out.push_str("<ol>");
-      while i < lines.len() {
-        let Some(item) = ordered_item(lines[i].trim_start()) else { break };
-        out.push_str(&format!("<li>{}</li>", inline(item, depth)));
-        i += 1;
-      }
-      out.push_str("</ol>");
-      continue;
-    }
-    // Paragraph: consecutive plain lines; each single newline is a hard break.
-    let mut parts: Vec<String> = Vec::new();
-    while i < lines.len() {
-      let t = lines[i].trim_start();
-      if t.is_empty() || starts_block(t) {
-        break;
-      }
-      parts.push(inline(lines[i].trim_end(), depth));
-      i += 1;
-    }
-    out.push_str(&format!("<p>{}</p>", parts.join("<br>")));
+    let (next, html) = one_block(lines, i, depth);
+    out.push_str(&html);
+    i = next;
   }
   out
+}
+
+/// Render the single block starting at the non-blank `lines[start]`; returns
+/// the index just past the block and its HTML.
+fn one_block(lines: &[&str], start: usize, depth: u32) -> (usize, String) {
+  let mut i = start;
+  let trimmed = lines[i].trim_start();
+  if trimmed.starts_with("```") {
+    // Fenced code block; an unclosed fence runs to the end of the input.
+    let mut j = i + 1;
+    let mut code = String::new();
+    while j < lines.len() && !lines[j].trim_start().starts_with("```") {
+      code.push_str(lines[j]);
+      code.push('\n');
+      j += 1;
+    }
+    return (j + 1, format!("<pre><code>{}</code></pre>", esc(&code)));
+  }
+  if let Some((level, content)) = heading(trimmed) {
+    return (i + 1, format!("<h{level}>{}</h{level}>", inline(content, depth)));
+  }
+  if is_rule(trimmed) {
+    return (i + 1, "<hr>".to_string());
+  }
+  if trimmed.starts_with('>') && depth < MAX_DEPTH {
+    let mut inner: Vec<&str> = Vec::new();
+    while i < lines.len() {
+      let t = lines[i].trim_start();
+      let Some(stripped) = t.strip_prefix('>') else { break };
+      inner.push(stripped.strip_prefix(' ').unwrap_or(stripped));
+      i += 1;
+    }
+    return (i, format!("<blockquote>{}</blockquote>", blocks_to_html(&inner, depth + 1)));
+  }
+  if unordered_item(trimmed).is_some() {
+    let mut out = String::from("<ul>");
+    while i < lines.len() {
+      let Some(item) = unordered_item(lines[i].trim_start()) else { break };
+      out.push_str(&format!("<li>{}</li>", inline(item, depth)));
+      i += 1;
+    }
+    out.push_str("</ul>");
+    return (i, out);
+  }
+  if ordered_item(trimmed).is_some() {
+    let mut out = String::from("<ol>");
+    while i < lines.len() {
+      let Some(item) = ordered_item(lines[i].trim_start()) else { break };
+      out.push_str(&format!("<li>{}</li>", inline(item, depth)));
+      i += 1;
+    }
+    out.push_str("</ol>");
+    return (i, out);
+  }
+  // Paragraph: consecutive plain lines; each single newline is a hard break.
+  let mut parts: Vec<String> = Vec::new();
+  while i < lines.len() {
+    let t = lines[i].trim_start();
+    if t.is_empty() || starts_block(t) {
+      break;
+    }
+    parts.push(inline(lines[i].trim_end(), depth));
+    i += 1;
+  }
+  (i, format!("<p>{}</p>", parts.join("<br>")))
 }
 
 /// True when the line begins some non-paragraph block, ending a paragraph.
@@ -296,5 +319,30 @@ mod tests {
   #[test]
   fn multibyte_text_is_preserved() {
     assert_eq!(to_html("héllo — **wörld** 🚀"), "<p>héllo — <strong>wörld</strong> 🚀</p>");
+  }
+
+  #[test]
+  fn blocks_carry_their_starting_source_lines() {
+    // The fence spans a blank line (9-13), so naive blank-line splitting
+    // would mangle it; block tracking must not.
+    let text = "# Title\n\npara one\npara two\n\n- a\n- b\n\n```\ncode\n\nmore\n```\n\n> q";
+    let blocks = to_html_blocks(text);
+    let lines: Vec<usize> = blocks.iter().map(|(l, _)| *l).collect();
+    assert_eq!(lines, vec![0, 2, 5, 8, 14]);
+    assert!(blocks[0].1.starts_with("<h1>"), "{}", blocks[0].1);
+    assert!(blocks[3].1.starts_with("<pre>"), "{}", blocks[3].1);
+  }
+
+  #[test]
+  fn concatenated_blocks_equal_to_html() {
+    for text in [
+      "# Title\n\npara one\npara two\n\n- a\n- b\n\n```\ncode\n\nmore\n```\n\n> q\n\n---",
+      "plain",
+      "",
+      "> nested\n> > deeper\n\n1. one\n2. two",
+    ] {
+      let joined: String = to_html_blocks(text).into_iter().map(|(_, h)| h).collect();
+      assert_eq!(joined, to_html(text), "for input {text:?}");
+    }
   }
 }
