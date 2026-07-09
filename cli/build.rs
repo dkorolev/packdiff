@@ -22,6 +22,16 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+  // docs.rs builds run with no network and no wasm32 target, so the engine
+  // cannot be built there — and rustdoc never executes it. An empty stub
+  // keeps `include_bytes!` satisfied and the API docs building.
+  if env::var_os("DOCS_RS").is_some() {
+    let stub = PathBuf::from(env::var("OUT_DIR").unwrap()).join("engine-stub.wasm");
+    std::fs::write(&stub, []).expect("write the docs.rs engine stub");
+    println!("cargo:rustc-env=PACKDIFF_WASM_PATH={}", stub.display());
+    return;
+  }
+
   let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
   let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
 
