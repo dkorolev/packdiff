@@ -5,6 +5,9 @@ members = ["dto", "wasm", "cli"]
 [workspace.package]
 version = "0.1.5"
 edition = "2021"
+# Minimum supported Rust: `u64::div_ceil` (1.73) is the newest API used;
+# verified by building the whole workspace with this exact toolchain.
+rust-version = "1.74"
 authors = ["Dmitry \"Dima\" Korolev <dmitry.korolev@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/dkorolev/packdiff"
