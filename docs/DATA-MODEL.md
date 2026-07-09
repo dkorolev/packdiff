@@ -84,6 +84,22 @@ Present when the range has two or more commits; powers the page's in-place commi
 - `boundaries[0]` is the diff's start (the merge base); `boundaries[k]` for `k > 0` is the state after the k-th commit. Only paths touched by some commit in the range appear in `files`; a missing path does not exist at that boundary.
 - `snapshot::range_diff(snapshots, from, to, context)` (WASM: `pd_range_diff`) produces the `FileDiff` array between two boundaries via a pure Myers line diff. Renames are not re-detected: within a sub-range a rename is a delete plus an add.
 
+### `description` — the lifted PR description
+
+Present when the range carries notes commits (the notes-commit convention — see [CLI.md](CLI.md)). The lifted file and its commits are excluded from `files`, `commits`, and the snapshot boundaries; this field is the only place they appear.
+
+```json
+{
+  "description": {
+    "path": "PR-DESCRIPTION.md",
+    "text": "# Summary\n\n…full markdown…",
+    "commits": ["<40-hex>"]
+  }
+}
+```
+
+Comments on the page's Description panel anchor to `path`, side `New`, 1-based lines of `text`.
+
 ## `ReviewDocument`
 
 The mutable review state. Lives in the browser's localStorage; every mutation goes through the model (via WASM in the browser). This is also the **Export JSON / Import JSON** format.

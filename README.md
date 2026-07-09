@@ -28,6 +28,7 @@ Open `review.html` anywhere — from disk (`file://`), over any static host, or 
 - **Unified or side-by-side**: a nav toggle switches the whole diff between unified and split views (enabled once the window is wide enough for the font size); commenting works on either.
 - **Export** the review as lossless JSON, Markdown grouped by file, or RFC 4180 CSV — and **import** JSON back on another machine (merge by comment id, newer edit wins).
 - **PR-style diffs by default**: `merge-base(BASE, HEAD)..HEAD`, so drift on the base branch doesn't pollute the review (`--no-merge-base` for the literal two-dot diff).
+- **A PR description panel**: commits authored by the notes author (`PACKDIFF_SYSTEM_USER_EMAIL`) are notes, not code — they are hidden from the page, and the `PR-DESCRIPTION.md` they committed renders as a commentable **Description** panel on top, like the pull request it will become.
 - **Live progress**: a progress bar with ETA at a terminal; in machine mode one `{ "Progress": ... }` JSON line per second on stderr, ending with `Done` — agents always know the stage and what remains.
 - **Script- and agent-native**: piped stdout automatically switches to machine mode — exactly one two-space JSON document per run, success and failure alike, as single-key unions (`{ "Packed": { … } }`, `{ "UnknownRef": { … } }`) — plus `--dump-json` for the full typed diff document and a documented exit-code table (`packdiff help exitcodes`).
 

@@ -33,6 +33,20 @@ Ref names are resolved with `rev-parse --verify <ref>^{commit}`, so anything git
 | `-V`, `--version` | Print `packdiff <version>` and exit 0 (works offline) | — |
 | `-h`, `--help`, `help` | Print comprehensive usage and exit 0; so does running with no arguments. `help exitcodes` prints the exit-code table | — |
 
+## The notes-commit convention
+
+Commits authored by the **notes author** carry PR notes — today, exactly one file is recognized: `PR-DESCRIPTION.md`, the future pull request's description. Such commits are not code under review, so packdiff lifts them out: the commits disappear from the page's commit list and the range filter, the file leaves the diff and the `+`/`−` totals, and the description renders as its own commentable **Description** panel on top of the page (see [PAGE.md](PAGE.md)).
+
+The notes author is an email match, configured by environment:
+
+```
+PACKDIFF_SYSTEM_USER_EMAIL   the notes author's commit email.
+                             Set empty to disable the convention.
+                             Default: dmitry.korolev+elon-presley@gmail.com
+```
+
+The lift is conservative: it happens only when a notes-authored commit actually **changed** `PR-DESCRIPTION.md` (a user-authored description is never claimed), and the panel shows the file as of the last notes commit that touched it. When the range has notes-authored commits but none touched the file, nothing is hidden — dropping commits without lifting anything would lose history.
+
 ## Liberal for humans, canonical for machines
 
 Help always shows the one canonical form, and at a terminal the CLI accepts unambiguous non-canonical spellings (`--no-color`, `-v`, bare `version`), resolving them and printing the canonical form to stderr as a dim nudge. In machine mode (piped stdout or `--json`) a non-canonical invocation does NOT run: the CLI exits 2 with a `NonCanonicalInvocation` document naming the canonical syntax. Aliases in scripts rot; this keeps them out.
@@ -71,10 +85,14 @@ Success — `{ "Packed": { ... } }`:
     "additions": 345,
     "deletions": 67,
     "binary_files": 0,
+    "description": "PR-DESCRIPTION.md",
+    "notes_commits": ["<40-hex>"],
     "warnings": []
   }
 }
 ```
+
+`description` names the notes file lifted into the page's Description panel and `notes_commits` lists the hidden notes commits (see the notes-commit convention below); `description` is `null` and `notes_commits` empty when the range has none. The lifted file and commits are excluded from `files`, `commits`, and the `additions`/`deletions` totals.
 
 Failure — a request-specific variant with `stage` and `exit_code` inside:
 
