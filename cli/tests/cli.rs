@@ -448,3 +448,78 @@ fn default_output_filename() {
 
   let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn notes_commits_lift_into_the_description_panel() {
+  if !git_available() {
+    eprintln!("SKIP: git not found on PATH");
+    return;
+  }
+  let tmp = tmpdir("notes");
+  let repo = tmp.join("sample");
+  make_repo(&repo);
+  // A notes commit on top of `feature`: PR-DESCRIPTION.md authored by the
+  // notes bot. The trailing `-c` outranks the helper's default user.email.
+  git(&repo, &["checkout", "-q", "feature"]);
+  write(&repo, "PR-DESCRIPTION.md", b"# Add evil\n\nThis PR adds `evil()`.\n\n- point one\n- point two\n");
+  git(&repo, &["add", "-A"]);
+  git(&repo, &["-c", "user.email=notes-bot@example.com", "commit", "-qm", "pr notes"]);
+
+  // With the matching notes author: the commit hides, the file lifts.
+  let out = tmp.join("with-notes.html");
+  let dump = tmp.join("with-notes.json");
+  let output = Command::new(bin())
+    .env("PACKDIFF_SYSTEM_USER_EMAIL", "notes-bot@example.com")
+    .args([
+      "main",
+      "feature",
+      "-C",
+      repo.to_str().unwrap(),
+      "-o",
+      out.to_str().unwrap(),
+      "--dump-json",
+      dump.to_str().unwrap(),
+    ])
+    .output()
+    .unwrap();
+  assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let packed = &doc["Packed"];
+  assert_eq!(packed["commits"], 2, "the notes commit is hidden from the count");
+  assert_eq!(packed["files"], 5, "PR-DESCRIPTION.md is lifted out of the diff");
+  assert_eq!(packed["description"], "PR-DESCRIPTION.md");
+  assert_eq!(packed["notes_commits"].as_array().unwrap().len(), 1);
+
+  let html = std::fs::read_to_string(&out).unwrap();
+  assert!(html.contains(r#"<section id="description">"#));
+  assert!(html.contains(r##"<a href="#description">Description</a>"##));
+  assert!(html.contains(r#"data-file="PR-DESCRIPTION.md" data-side="New" data-line="1""#));
+  assert!(html.contains("<h1>Add evil</h1>"), "the description renders at build time");
+  assert!(!html.contains("pr notes"), "the notes commit stays off the commits table");
+  assert!(!html.contains(">PR-DESCRIPTION.md</a>"), "not in the Files changed index");
+
+  let typed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+  assert!(typed["description"]["text"].as_str().unwrap().starts_with("# Add evil"));
+  let boundaries = typed["snapshots"]["boundaries"].as_array().unwrap();
+  assert_eq!(boundaries.len(), 3, "merge-base plus the two CODE commits only");
+  assert!(!serde_json::to_string(&typed["snapshots"]).unwrap().contains("PR-DESCRIPTION"));
+
+  // Without a matching notes author (the built-in default does not match
+  // this repo), the same range shows the commit and the file like any other.
+  let plain_out = tmp.join("plain.html");
+  let output = Command::new(bin())
+    .env_remove("PACKDIFF_SYSTEM_USER_EMAIL")
+    .args(["main", "feature", "-C", repo.to_str().unwrap(), "-o", plain_out.to_str().unwrap()])
+    .output()
+    .unwrap();
+  assert!(output.status.success());
+  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  assert_eq!(doc["Packed"]["commits"], 3);
+  assert_eq!(doc["Packed"]["files"], 6);
+  assert!(doc["Packed"]["description"].is_null());
+  let html = std::fs::read_to_string(&plain_out).unwrap();
+  assert!(!html.contains(r#"<section id="description">"#));
+  assert!(html.contains("pr notes"));
+
+  let _ = std::fs::remove_dir_all(&tmp);
+}
