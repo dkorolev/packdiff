@@ -159,6 +159,7 @@ pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Re
     commits,
     files,
     snapshots,
+    None,
   ))
 }
 

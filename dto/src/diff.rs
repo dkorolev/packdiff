@@ -42,13 +42,36 @@ pub struct DiffDocument {
   /// two commits, where there is nothing to filter.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub snapshots: Option<crate::snapshot::RangeSnapshots>,
+  /// The PR description lifted out of the diff (the notes-commit
+  /// convention: commits authored by the system notes author carry notes
+  /// such as `PR-DESCRIPTION.md`, not code under review). Rendered as its
+  /// own commentable panel; its commits and file are excluded from
+  /// `commits` / `files`. `None` (and omitted from JSON) when the range has
+  /// no notes commits.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub description: Option<NotesFile>,
+}
+
+/// A notes file lifted out of the diff and presented as a page panel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotesFile {
+  /// The path the file was committed under (e.g. `PR-DESCRIPTION.md`);
+  /// comments on the rendered panel anchor to this path, `New` side,
+  /// 1-based source lines.
+  pub path: String,
+  /// The file's full markdown text, as of the last notes commit.
+  pub text: String,
+  /// The notes commits (full SHAs, oldest first) hidden from the commit
+  /// list — recorded so the provenance stays in the document.
+  pub commits: Vec<String>,
 }
 
 impl DiffDocument {
   #[allow(clippy::too_many_arguments)]
   pub fn new(
     repo: String, base: RefInfo, head: RefInfo, merge_base: String, generated_at: String, commits: Vec<Commit>,
-    files: Vec<FileDiff>, snapshots: Option<crate::snapshot::RangeSnapshots>,
+    files: Vec<FileDiff>, snapshots: Option<crate::snapshot::RangeSnapshots>, description: Option<NotesFile>,
   ) -> Self {
     Self {
       schema_version: SCHEMA_VERSION,
@@ -61,6 +84,7 @@ impl DiffDocument {
       commits,
       files,
       snapshots,
+      description,
     }
   }
 
@@ -479,11 +503,30 @@ Binary files a/blob.bin and b/blob.bin differ
       vec![],
       parsed(),
       None,
+      Some(NotesFile {
+        path: "PR-DESCRIPTION.md".into(),
+        text: "# Title\n\nBody.".into(),
+        commits: vec!["d".repeat(40)],
+      }),
     );
     let json = serde_json::to_string(&doc).unwrap();
     let back: DiffDocument = serde_json::from_str(&json).unwrap();
     assert_eq!(back.schema_version, SCHEMA_VERSION);
     assert_eq!(back.files.len(), 5);
     assert_eq!(back.additions(), doc.additions());
+    assert_eq!(back.description.unwrap().path, "PR-DESCRIPTION.md");
+    // Absent description stays absent from the JSON, not `null`.
+    let none = DiffDocument::new(
+      "repo".into(),
+      RefInfo { name: "main".into(), sha: "a".repeat(40) },
+      RefInfo { name: "feat".into(), sha: "b".repeat(40) },
+      "c".repeat(40),
+      "2026-07-03T00:00:00Z".into(),
+      vec![],
+      vec![],
+      None,
+      None,
+    );
+    assert!(!serde_json::to_string(&none).unwrap().contains("description"));
   }
 }
