@@ -464,6 +464,12 @@ fn notes_commits_lift_into_the_description_panel() {
   write(&repo, "PR-DESCRIPTION.md", b"# Add evil\n\nThis PR adds `evil()`.\n\n- point one\n- point two\n");
   git(&repo, &["add", "-A"]);
   git(&repo, &["-c", "user.email=notes-bot@example.com", "commit", "-qm", "pr notes"]);
+  // A CODE commit by the SAME bot identity (an orchestrator like scsh authors every
+  // integrated commit as one bot): it touches code, so it must stay on the page —
+  // only commits CONFINED to the notes file are notes.
+  write(&repo, "bot_code.txt", b"the bot wrote code too\n");
+  git(&repo, &["add", "-A"]);
+  git(&repo, &["-c", "user.email=notes-bot@example.com", "commit", "-qm", "bot code"]);
 
   // With the matching notes author: the commit hides, the file lifts.
   let out = tmp.join("with-notes.html");
@@ -485,8 +491,8 @@ fn notes_commits_lift_into_the_description_panel() {
   assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
   let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
   let packed = &doc["Packed"];
-  assert_eq!(packed["commits"], 2, "the notes commit is hidden from the count");
-  assert_eq!(packed["files"], 5, "PR-DESCRIPTION.md is lifted out of the diff");
+  assert_eq!(packed["commits"], 3, "only the notes commit is hidden — the bot's CODE commit counts");
+  assert_eq!(packed["files"], 6, "PR-DESCRIPTION.md is lifted out of the diff");
   assert_eq!(packed["description"], "PR-DESCRIPTION.md");
   assert_eq!(packed["notes_commits"].as_array().unwrap().len(), 1);
 
@@ -496,6 +502,7 @@ fn notes_commits_lift_into_the_description_panel() {
   assert!(html.contains(r#"data-file="PR-DESCRIPTION.md" data-side="New" data-line="1""#));
   assert!(html.contains("<h1>Add evil</h1>"), "the description renders at build time");
   assert!(!html.contains("pr notes"), "the notes commit stays off the commits table");
+  assert!(html.contains("bot code"), "the bot-authored CODE commit stays ON the commits table");
   assert!(!html.contains(">PR-DESCRIPTION.md</a>"), "not in the Files changed index");
   // No provenance chrome: the panel is just the description. The path
   // appears ONLY inside comment anchors, never as visible text.
@@ -509,7 +516,7 @@ fn notes_commits_lift_into_the_description_panel() {
   let typed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
   assert!(typed["description"]["text"].as_str().unwrap().starts_with("# Add evil"));
   let boundaries = typed["snapshots"]["boundaries"].as_array().unwrap();
-  assert_eq!(boundaries.len(), 3, "merge-base plus the two CODE commits only");
+  assert_eq!(boundaries.len(), 4, "merge-base plus the three CODE commits only");
   assert!(!serde_json::to_string(&typed["snapshots"]).unwrap().contains("PR-DESCRIPTION"));
 
   // Without a matching notes author (the built-in default does not match
@@ -522,8 +529,8 @@ fn notes_commits_lift_into_the_description_panel() {
     .unwrap();
   assert!(output.status.success());
   let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-  assert_eq!(doc["Packed"]["commits"], 3);
-  assert_eq!(doc["Packed"]["files"], 6);
+  assert_eq!(doc["Packed"]["commits"], 4);
+  assert_eq!(doc["Packed"]["files"], 7);
   assert!(doc["Packed"]["description"].is_null());
   let html = std::fs::read_to_string(&plain_out).unwrap();
   assert!(!html.contains(r#"<section id="description">"#));

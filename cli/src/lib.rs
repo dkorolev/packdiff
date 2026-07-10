@@ -156,30 +156,38 @@ fn collect_snapshots(
 }
 
 /// Partition the range's commits per the notes-commit convention: commits
-/// authored by `notes_email` carry notes such as `PR-DESCRIPTION.md`, not
-/// code under review. When such a commit CHANGED the description (presence
-/// in its tree is not enough — a user-authored description must not be
-/// claimed), returns the code commits plus the lifted [`NotesFile`] — the
-/// description text as of the last notes commit that touched it. With no
-/// notes email, no notes commits, or no notes-authored description,
-/// everything stays as it was (hiding commits without lifting anything
-/// would lose history).
+/// authored by `notes_email` whose changes are CONFINED to the notes file
+/// carry notes such as `PR-DESCRIPTION.md`, not code under review. Both
+/// halves of the test matter. Authorship alone is not enough: the notes
+/// identity may also author code — a run orchestrator like scsh integrates
+/// every agent commit under one bot identity — and code commits must stay
+/// on the page no matter who authored them. Touching the description alone
+/// is not enough either: a user-authored description must not be claimed,
+/// and a mixed commit (code + description in one) is code. Returns the code
+/// commits plus the lifted [`NotesFile`] — the description text as of the
+/// last notes commit. With no notes email, no notes commits, or no readable
+/// description text, everything stays as it was (hiding commits without
+/// lifting anything would lose history).
 fn split_notes(
   repo: &str, commits: Vec<packdiff_dto::diff::Commit>, notes_email: Option<&str>,
 ) -> Result<(Vec<packdiff_dto::diff::Commit>, Option<NotesFile>), Error> {
   let Some(email) = notes_email else { return Ok((commits, None)) };
-  if !commits.iter().any(|c| c.email == email) {
-    return Ok((commits, None));
-  }
-  let mut text = None;
-  for c in commits.iter().rev().filter(|c| c.email == email) {
+  // Commits arrive oldest-first (`git log --reverse`), so `notes_shas` is too.
+  let mut notes_shas = Vec::new();
+  for c in commits.iter().filter(|c| c.email == email) {
     // `sha^` can fail only for a parentless commit in the range (disjoint
     // histories in two-dot mode); such a commit is not a notes commit.
     let touched = git::changed_paths(repo, &format!("{}^", c.sha), &c.sha).unwrap_or_default();
-    if !touched.iter().any(|p| p == NOTES_DESCRIPTION_PATH) {
-      continue;
+    if !touched.is_empty() && touched.iter().all(|p| p == NOTES_DESCRIPTION_PATH) {
+      notes_shas.push(c.sha.clone());
     }
-    let blobs = git::tree_blobs(repo, &c.sha, &[NOTES_DESCRIPTION_PATH.to_string()])?;
+  }
+  if notes_shas.is_empty() {
+    return Ok((commits, None));
+  }
+  let mut text = None;
+  for sha in notes_shas.iter().rev() {
+    let blobs = git::tree_blobs(repo, sha, &[NOTES_DESCRIPTION_PATH.to_string()])?;
     if let Some(id) = blobs.get(NOTES_DESCRIPTION_PATH) {
       text = git::blob_text(repo, id, MAX_SNAPSHOT_BLOB_BYTES)?;
       if text.is_some() {
@@ -188,7 +196,7 @@ fn split_notes(
     }
   }
   let Some(text) = text else { return Ok((commits, None)) };
-  let (notes, code): (Vec<_>, Vec<_>) = commits.into_iter().partition(|c| c.email == email);
+  let (notes, code): (Vec<_>, Vec<_>) = commits.into_iter().partition(|c| notes_shas.contains(&c.sha));
   let description = NotesFile {
     path: NOTES_DESCRIPTION_PATH.to_string(),
     text,
