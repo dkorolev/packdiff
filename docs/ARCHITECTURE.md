@@ -48,13 +48,16 @@ The only prerequisite beyond stable Rust is the wasm32 std: `rustup target add w
 
 ## The generated page
 
-`render.rs` emits a single HTML document containing, in order: inline CSS (light/dark via `prefers-color-scheme`), the header/commits/files markup (all crawled strings HTML-escaped at render time), and three `<script>` tags:
+Authored frontend assets live in `cli/assets/page.css` and `cli/assets/page.js` and are embedded at compile time with `include_str!`. `render.rs` assembles a single HTML document containing, in order: inline CSS, the review chrome/sidebar/diff markup (all Git-derived strings HTML-escaped at render time), and script tags:
 
-1. `#packdiff-config` (`application/json`) — repo, refs+SHAs, merge-base (with `</` escaped to `<\/`).
-2. `#packdiff-wasm` (`application/wasm-base64`) — the module bytes.
-3. The view-layer JS: decode base64 → `WebAssembly.instantiate(bytes, {})` → derive the storage key via `pd_storage_key` → load/normalize the stored document via `pd_parse_document` → render comment rows; then delegate every user action to the corresponding `pd_*` call and re-render from its result.
+1. `#packdiff-config` (`application/json`) — repo, refs+SHAs, merge-base (with `<` escaped to `\u003c`).
+2. `#packdiff-snapshots` (optional) — commit-boundary blob snapshots for in-page range diffs.
+3. `#packdiff-wasm` (`application/wasm-base64`) — the module bytes.
+4. The view-layer JS: decode base64 → `WebAssembly.instantiate(bytes, {})` → derive the storage key via `pd_storage_key` → load/normalize the stored document via `pd_parse_document` → render comment rows; then delegate every user action to the corresponding `pd_*` call and re-render from its result.
 
-Diff rows carry the anchor as data attributes (`data-file`, `data-side`, `data-line`), which is the entire coupling between the rendered diff and the review model.
+UI preferences (sidebar, wrap, theme, viewed files, drafts) use a separate `…:prefs` localStorage record and never enter the portable review document.
+
+Diff rows carry the anchor as data attributes (`data-file`, `data-side`, `data-line`), which is the entire coupling between the rendered diff and the review model. Comment creation targets the explicit gutter `+` control.
 
 ## Testing strategy
 
@@ -63,8 +66,9 @@ Each layer is tested through its real interface, and the heavier layers test the
 | Layer | Where | What it proves |
 | --- | --- | --- |
 | model | `dto/src/*` unit tests (43) | Parser line-numbering and statuses, validation, ordering, merge conflict rules, schema rejection, export shapes, canonical round-trips |
-| CLI | `cli/tests/cli.rs` (9, real binary + scratch git repo) | merge-base vs two-dot semantics, `--json`/`--dump-json` contracts, exit codes 2/3/4, HTML self-containment, XSS escaping, wasm inlining (skips with a hint if git is absent) |
-| WASM | `tests/wasm_abi.test.mjs` (9, Node ≥18) | The real `.wasm` under the exact page calling convention: alloc/free protocol, envelopes, every export, error paths (skips with a hint until built) |
+| CLI | `cli/tests/cli.rs` (real binary + scratch git repo) | merge-base vs two-dot semantics, `--json`/`--dump-json` contracts, exit codes 2/3/4, HTML self-containment, XSS escaping, wasm inlining (skips with a hint if git is absent) |
+| WASM | `tests/wasm_abi.test.mjs` (Node ≥18) | The real `.wasm` under the exact page calling convention: alloc/free protocol, envelopes, every export, error paths (skips with a hint until built) |
+| Browser UI | `tests/browser/ui.spec.mjs` (Playwright) | Generated HTML over `file://`: chrome/sidebar, gutter comments, Preview/Diff, viewed state, range filter, no network after load (installs Chromium on first run) |
 
 `./test.sh` runs all of it, plus `cargo fmt --check` and a release-mode test pass. The same script is the pre-push hook (`.githooks/pre-push`; enable with `git config core.hooksPath .githooks`) and the CI gate (`.github/workflows/ci.yml`). A clean checkout stays green: tests missing a prerequisite (git, Node) skip with a hint rather than fail.
 

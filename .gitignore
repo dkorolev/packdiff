@@ -3,3 +3,7 @@
 /target-wasm/
 out/
 packdiff-*.html
+node_modules/
+test-results/
+playwright-report/
+tmp/

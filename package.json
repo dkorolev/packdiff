@@ -1,0 +1,11 @@
+{
+  "name": "packdiff-browser-tests",
+  "private": true,
+  "description": "Browser UI tests for generated packdiff pages — not shipped with the binary",
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  },
+  "scripts": {
+    "test:browser": "playwright test"
+  }
+}

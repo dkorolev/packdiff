@@ -25,3 +25,26 @@ if command -v node >/dev/null 2>&1; then
 else
   echo "SKIP: node not found on PATH — install Node.js 18+ to run the wasm ABI test"
 fi
+
+echo "== browser UI tests (Playwright, optional) =="
+if command -v node >/dev/null 2>&1 && [[ -f package.json ]]; then
+  if [[ ! -d node_modules/@playwright/test ]]; then
+    echo "Installing Playwright test runner (dev dependency)…"
+    npm install --no-fund --no-audit
+  fi
+  # Ensure Chromium is present; in CI also pull OS libraries.
+  if [[ -n "${CI:-}" ]]; then
+    npx playwright install --with-deps chromium
+  else
+    npx playwright install chromium >/dev/null
+  fi
+  # PACKDIFF_BIN points at the debug binary built by cargo test above when present.
+  if [[ -x target/debug/packdiff ]]; then
+    export PACKDIFF_BIN="$PWD/target/debug/packdiff"
+  elif [[ -x target/release/packdiff ]]; then
+    export PACKDIFF_BIN="$PWD/target/release/packdiff"
+  fi
+  npx playwright test
+else
+  echo "SKIP: node/package.json unavailable — install Node.js 18+ for browser UI tests"
+fi

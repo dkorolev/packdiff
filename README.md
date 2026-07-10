@@ -21,12 +21,12 @@ Wrote review.html (12 files, +345 −67, 5 commits)
 
 Open `review.html` anywhere — from disk (`file://`), over any static host, or mailed to a colleague. The page makes **zero network requests**: CSS, the diff, and the comment engine are all inside the one file.
 
-- **Click any diff line to comment** (Ctrl/Cmd+Enter saves; markdown supported) — in rendered markdown previews, click a block to comment on the source line it starts at. Comments persist in the browser's localStorage, keyed to the exact repo + commit SHAs.
-- **Markdown files render**: `.md` files in the diff open in the rendered markdown view (added lines tinted green, removed lines red); a two-sided **Preview | Diff** pill switches to the diff text and back.
-- **Filter by commits**: click a commit to see only its diff, click a second to select the range between them (computed in-page by the WASM engine), and copy any commit's full hash with one button.
-- **Navigate quickly**: a sticky nav with live counts (commits · files · LOC delta) and a *Files changed* index that jumps straight to any file's diff.
-- **Unified or side-by-side**: a nav toggle switches the whole diff between unified and split views (enabled once the window is wide enough for the font size); commenting works on either.
-- **Export** the review as lossless JSON, Markdown grouped by file, or RFC 4180 CSV — and **import** JSON back on another machine (merge by comment id, newer edit wins).
+- **Comment from the gutter** (`+` on every commentable line; Ctrl/Cmd+Enter saves; markdown with Write/Preview) — works in unified, split, and rendered Markdown. Comments persist in localStorage, keyed to the exact repo + commit SHAs.
+- **Review workspace layout**: compact sticky chrome, persistent file sidebar (search, filters, viewed progress), enriched file headers, and a review-summary drawer for the final pass before export.
+- **Markdown files render**: `.md` files open in the rendered view (added green, removed red); a **Preview | Diff** pill switches while preserving place.
+- **Filter by commits**: checkboxes or click/Shift-click select a commit or range (computed in-page by the WASM engine); range views are clearly read-only.
+- **Unified or side-by-side**, plus a **Wrap** preference; split enables when the workspace is wide enough.
+- **Export** the review as lossless JSON, Markdown, or CSV from the Actions menu or summary drawer — and **import** JSON back (merge by comment id, newer edit wins).
 - **PR-style diffs by default**: `merge-base(BASE, HEAD)..HEAD`, so drift on the base branch doesn't pollute the review (`--no-merge-base` for the literal two-dot diff).
 - **A PR description panel**: commits authored by the notes author (`PACKDIFF_SYSTEM_USER_EMAIL`) are notes, not code — they are hidden from the page, and the `PR-DESCRIPTION.md` they committed renders as a commentable **Description** panel on top, like the pull request it will become.
 - **Live progress**: a progress bar with ETA at a terminal; in machine mode one `{ "Progress": ... }` JSON line per second on stderr, ending with `Done` — agents always know the stage and what remains.
@@ -42,8 +42,9 @@ packdiff/
 │             operations, exports — pure logic, no I/O, no clock
 ├── wasm/     thin C ABI over dto/, built for wasm32-unknown-unknown
 ├── cli/      the `packdiff` binary: git + HTML rendering; embeds the wasm
+│   └── assets/  authored page CSS/JS (inlined at compile time)
 ├── docs/     reference documentation
-└── tests/    Node test driving the real .wasm exactly like the page does
+└── tests/    wasm ABI tests + Playwright browser UI tests
 ```
 
 ## Install

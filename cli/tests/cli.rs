@@ -147,22 +147,25 @@ fn end_to_end() {
   for id in ["export-json", "export-md", "export-csv", "copy-md", "import-json"] {
     assert!(html.contains(&format!("id=\"{id}\"")), "missing #{id}");
   }
-  // Three navigable sections and a sticky nav that links to each, plus a
-  // "Files changed" index whose rows anchor into the diff panels.
-  assert!(html.contains(r#"<nav id="topnav">"#));
+  // Compact chrome + sections: commits/files/diff remain in the document;
+  // the interactive file index lives in the sidebar (plus a no-JS fallback list).
+  assert!(html.contains(r#"id="topnav""#));
+  assert!(html.contains(r#"id="sidebar""#));
+  assert!(html.contains(r#"class="gutter-btn""#), "comment gutter buttons present");
   for id in ["commits", "files", "diff"] {
     assert!(html.contains(&format!("<section id=\"{id}\"")), "missing #{id} section");
-    assert!(html.contains(&format!("href=\"#{id}\"")), "nav missing link to #{id}");
   }
-  // One index row and one diff panel per file (5 in the fixture), anchored to
-  // matching #file-N ids.
+  assert!(html.contains(r##"href="#commits""##));
+  assert!(html.contains(r##"href="#diff""##));
+  // One fallback index + one sidebar row + one diff panel per file (5 in the fixture).
   assert_eq!(html.matches(r#"class="filelist""#).count(), 1);
   assert_eq!(html.matches("href=\"#file-").count(), 5);
+  assert_eq!(html.matches(r#"class="sidebar-row""#).count(), 5);
   assert_eq!(html.matches("<details class=\"file\" id=\"file-").count(), 5);
-  // Side-by-side: a view toggle in the nav (disabled until the JS enables it
-  // on a wide-enough window) and every diff table wrapped for a split sibling.
-  assert!(html.contains(r#"<button id="view-toggle" type="button" disabled>"#));
-  assert_eq!(html.matches(r#"<table class="diff unified">"#).count(), html.matches(r#"class="diff-wrap""#).count());
+  // Side-by-side: a view toggle in the chrome (disabled until the JS enables it
+  // on a wide-enough workspace) and every diff table wrapped for a split sibling.
+  assert!(html.contains(r#"id="view-toggle""#));
+  assert_eq!(html.matches(r#"class="diff unified""#).count(), html.matches(r#"class="diff-wrap""#).count());
 
   // The dumped DiffDocument parses back through the dto schema, with
   // single-key line unions.
@@ -498,9 +501,15 @@ fn notes_commits_lift_into_the_description_panel() {
 
   let html = std::fs::read_to_string(&out).unwrap();
   assert!(html.contains(r#"<section id="description">"#));
-  assert!(html.contains(r##"<a href="#description">Description</a>"##));
+  assert!(html.contains(r##"href="#description""##));
   assert!(html.contains(r#"data-file="PR-DESCRIPTION.md" data-side="New" data-line="1""#));
   assert!(html.contains("<h1>Add evil</h1>"), "the description renders at build time");
+  // Preview | Raw: rendered card by default, source table hidden until toggled.
+  assert!(html.contains(r#"class="seg md-seg desc-seg""#));
+  assert!(html.contains(r#"data-mdview="raw""#));
+  assert!(html.contains(r#"class="desc-raw" hidden"#));
+  assert!(html.contains(r#"class="diff unified desc-source""#));
+  assert!(html.contains("# Add evil"), "raw source carries the markdown text");
   assert!(!html.contains("pr notes"), "the notes commit stays off the commits table");
   assert!(html.contains("bot code"), "the bot-authored CODE commit stays ON the commits table");
   assert!(!html.contains(">PR-DESCRIPTION.md</a>"), "not in the Files changed index");

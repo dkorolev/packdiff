@@ -2,7 +2,7 @@
 
 ## The two gates
 
-The full test pass (`./test.sh`: `cargo fmt --check`, debug tests, release tests, and the Node wasm-ABI test) runs at exactly two points, and both must be green:
+The full test pass (`./test.sh`: `cargo fmt --check`, debug tests, release tests, the Node wasm-ABI test, and Playwright browser UI tests) runs at exactly two points, and both must be green:
 
 1. **Pre-push hook** — enable once per clone:
 
