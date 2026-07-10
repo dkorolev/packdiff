@@ -256,6 +256,49 @@ test('keyboard help opens with ?', async ({ page }) => {
   await expect(page.locator('#help-dialog')).toBeHidden();
 });
 
+test('dialogs trap focus and restore it when closed', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const trigger = page.locator('#comment-count');
+  await trigger.focus();
+  await trigger.click();
+  await expect(page.locator('#summary-close')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.locator('#summary-copy-md')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#summary-close')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(trigger).toBeFocused();
+
+  await page.locator('#actions-menu summary').focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#copy-md')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#actions-menu summary')).toBeFocused();
+});
+
+test('mobile supports the complete create and cancel comment flow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.evaluate(() => {
+    const file = Array.from(document.querySelectorAll('#files-full details.file'))
+      .find((d) => d.querySelector('.diff-wrap'));
+    file.open = true;
+    const preview = file.querySelector('.md-preview');
+    if (preview) preview.hidden = true;
+    file.querySelector('.diff-wrap').hidden = false;
+  });
+  const gutter = page.locator('#files-full .diff-wrap:not([hidden]) .gutter-btn').first();
+  await gutter.click();
+  const editor = page.locator('.pd-editor textarea');
+  await editor.fill('mobile review');
+  await page.keyboard.press('Control+Enter');
+  await expect(page.locator('#comment-count')).toContainText('1 comment');
+
+  await gutter.click();
+  await expect(editor).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(editor).toBeHidden();
+});
+
 test('light and dark screenshots (layout smoke)', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   mkdirSync(join(root, 'tmp'), { recursive: true });
