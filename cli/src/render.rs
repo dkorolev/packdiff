@@ -54,7 +54,7 @@ fn render_commits(doc: &DiffDocument) -> String {
   let mut out = String::new();
   if doc.snapshots.is_some() {
     out.push_str(
-      r#"<div class="hint">Select commits with the checkboxes (or click a row; Shift-click spans a range). Sub-range diffs are read-only — comments attach to the full diff only.</div>"#,
+      r#"<div class="hint"><strong>Inspect a commit or range.</strong> Select one commit, then Shift-click another to span a range. The filtered diff is read-only; return to the full diff to comment.</div>"#,
     );
   }
   out.push_str(r#"<table class="commits" role="grid" aria-label="Commits in range">"#);
@@ -460,9 +460,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 {desc_link}
 <a class="chrome-link" href="#commits">Commits</a>
 <a class="chrome-link" href="#diff">Diff</a>
-<button type="button" id="comment-count" aria-haspopup="dialog" aria-controls="summary-drawer">0 comments</button>
-<button type="button" id="view-toggle" disabled aria-pressed="false">Side-by-side</button>
-<button type="button" id="wrap-toggle" aria-pressed="false" title="Wrap long lines">Wrap</button>
+<button type="button" id="comment-count" class="review-summary" aria-haspopup="dialog" aria-controls="summary-drawer">Review · 0 comments</button>
 <details class="menu" id="actions-menu">
 <summary aria-label="Review actions">Actions</summary>
 <div class="menu-panel" role="menu">
@@ -473,6 +471,8 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <button type="button" id="export-csv" role="menuitem">Export CSV</button>
 <label class="btn" role="menuitem">Import JSON<input id="import-json" type="file" accept="application/json,.json" hidden></label>
 <h3>View</h3>
+<button type="button" id="view-toggle" role="menuitem" disabled aria-pressed="false">Side-by-side</button>
+<button type="button" id="wrap-toggle" role="menuitem" aria-pressed="false">Wrap long lines</button>
 <button type="button" id="theme-system" role="menuitem">Theme: System</button>
 <button type="button" id="theme-light" role="menuitem">Theme: Light</button>
 <button type="button" id="theme-dark" role="menuitem">Theme: Dark</button>

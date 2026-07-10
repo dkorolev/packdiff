@@ -143,7 +143,7 @@
     const btn = document.getElementById('wrap-toggle');
     if (btn) {
       btn.setAttribute('aria-pressed', prefs.wrap_lines ? 'true' : 'false');
-      btn.textContent = prefs.wrap_lines ? 'No wrap' : 'Wrap';
+      btn.textContent = prefs.wrap_lines ? 'Do not wrap lines' : 'Wrap long lines';
     }
   }
   function applySidebarPref() {
@@ -266,7 +266,7 @@
     const n = doc.comments.length;
     const label = n + ' comment' + (n === 1 ? '' : 's');
     const btn = document.getElementById('comment-count');
-    if (btn) btn.textContent = label;
+    if (btn) btn.textContent = 'Review · ' + label;
     // gutter badges
     document.querySelectorAll('.gutter-btn').forEach((btn) => {
       const file = btn.dataset.file;

@@ -207,6 +207,12 @@ button[aria-pressed="true"] {
   margin-left: auto;
 }
 
+.review-summary {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .app-chrome a.chrome-link {
   color: var(--fg);
   font-size: 13px;
