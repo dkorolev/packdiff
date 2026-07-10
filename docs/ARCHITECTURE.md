@@ -74,7 +74,7 @@ Each layer is tested through its real interface, and the heavier layers test the
 
 ## Web layer stance
 
-The page follows a binary heuristic: anything with real logic or state is strongly-typed Rust compiled to WASM (the whole review model); what remains in JavaScript is deliberately trivial view-glue — DOM assembly, event wiring, localStorage I/O — kept framework-free and small. Nothing lives in between.
+**Strict Rust for the engine, vanilla JS for the player.** The boundary is drawn by responsibility, not by size. The **engine** is everything with review semantics — validation, ordering, merge, exports, markdown, storage keys, range diffs — strongly-typed Rust in `packdiff-dto`, compiled to WASM for the page. The litmus test: if a behavior changes what an export contains or what a stored review document means, it is engine work and lands in Rust. The **player** — `cli/assets/page.js` — is deliberately vanilla JavaScript owning presentation and browser state only: DOM assembly, event wiring, view preferences (sidebar, wrap, theme, viewed files, drafts), localStorage I/O. The player may be substantial — a review workspace has a lot of view — but it stays framework-free, build-step-free, and semantics-free: it round-trips JSON through `pd_*` calls and never edits the review document itself. This split is a settled decision, not a migration way-station — the player is not waiting to be rewritten in `wasm-bindgen`.
 
 ## External processes and liveness
 

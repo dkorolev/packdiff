@@ -1,7 +1,15 @@
 'use strict';
-// packdiff page view layer. Every review-document read/mutation/export goes
-// through the embedded WASM build of packdiff-dto. UI preferences (sidebar,
-// viewed files, wrap, theme, drafts) use a separate localStorage record.
+// The PLAYER. packdiff splits the page in two — strict Rust for the ENGINE,
+// vanilla JS for the PLAYER — a settled boundary, drawn by responsibility,
+// not size (docs/ARCHITECTURE.md, "Web layer stance").
+//
+// This file owns presentation and browser state only: DOM assembly, event
+// wiring, and view preferences (sidebar, wrap, theme, viewed files, drafts —
+// a separate `…:prefs` localStorage record, never exported). Every
+// review-document read/mutation/export goes through the embedded WASM build
+// of packdiff-dto (`pd_*` calls). The litmus test for new code: if it would
+// change what an export says or what a stored review document means, it
+// belongs in Rust, not here. Framework-free and build-step-free by design.
 (async function () {
   const CONFIG = JSON.parse(document.getElementById('packdiff-config').textContent);
   const META = JSON.stringify({ repo: CONFIG.repo, base: CONFIG.base, head: CONFIG.head });

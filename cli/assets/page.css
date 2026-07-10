@@ -1,5 +1,6 @@
 /* packdiff review page — self-contained, zero network requests.
-   Design tokens + layout for the review workspace (see WORK-PLAN.md). */
+   Design tokens + layout for the review workspace: styling for the player
+   (docs/ARCHITECTURE.md, "Web layer stance"), inlined at compile time. */
 
 :root {
   --bg: #ffffff;

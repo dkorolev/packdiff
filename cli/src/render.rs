@@ -5,6 +5,10 @@
 //! Authored frontend assets live in `cli/assets/` and are embedded at compile
 //! time via `include_str!` — the generated artifact remains one self-contained
 //! HTML file.
+//!
+//! The web-layer split is doctrine: strict Rust for the engine (all review
+//! semantics, in `packdiff-dto`), vanilla JS for the player (`assets/page.js`,
+//! presentation and browser state only) — see docs/ARCHITECTURE.md.
 
 use packdiff_dto::diff::{DiffDocument, FileDiff, FileStatus, Line};
 use packdiff_dto::markdown;
