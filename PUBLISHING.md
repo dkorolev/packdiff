@@ -2,7 +2,15 @@
 
 packdiff is a three-crate workspace, and the crates depend on each other, so they must be published **in dependency order** and their versions kept in lockstep. This page is the maintainer playbook.
 
-## Quick reference
+## Releases are automated
+
+Merging a PR whose last commit bumps the workspace version **is** the release. On every push to `main`, [`.github/workflows/cargo-crates-publish.yml`](.github/workflows/cargo-crates-publish.yml) reads the version, asks the crates.io index which of the three crates do not serve it yet, publishes exactly those — in dependency order — and then tags the commit `vX.Y.Z` and creates the GitHub release. A merge without a version bump publishes nothing; a run that failed halfway is safe to re-run, it just finishes the remainder.
+
+Authentication is crates.io **Trusted Publishing** (OIDC) — no long-lived registry token is stored anywhere. One-time setup, per crate, by a crate owner: on crates.io, *Settings → Trusted Publishing → Add* a GitHub publisher with repository `dkorolev/packdiff`, workflow filename `cargo-crates-publish.yml`, environment left blank. All three crates (`packdiff-dto`, `packdiff-wasm`, `packdiff`) need the entry. (A brand-new crate would need one manual first publish before Trusted Publishing can be configured for it.)
+
+So a normal release is: land the PR ending in the bump commit, watch the `publish` run go green, done. Everything below is the manual fallback — the same sequence the workflow performs — for when the automation is unavailable or a release must be driven by hand.
+
+## Quick reference (manual fallback)
 
 Publish the three crates **in this exact order** (each must be on crates.io before the next, which depends on it, can build):
 
@@ -55,13 +63,13 @@ Why the internal dep carries both `path` and `version`: inside the workspace car
 Every PR runs `.github/workflows/version-gate.yml`, which enforces the release ladder mechanically (`.github/version-gate.py`, also runnable locally):
 
 1. The two version literals in the root `Cargo.toml` agree (`[workspace.package]` and the `packdiff-dto` pin).
-2. All three modules serve the same version on crates.io — a half-done publish (say, `dto` landed but `wasm`/`cli` did not) blocks every PR until it is finished, in dependency order.
-3. Versions move forward: crates.io never serves more than the base branch holds. `main` being ahead of crates.io is fine — that is a pending release, reported as a warning, published whenever convenient.
+2. All three modules serve the same version on crates.io — a half-done publish (say, `dto` landed but `wasm`/`cli` did not) blocks every PR until it is finished, in dependency order. (The publish workflow's re-run is the finisher: it publishes exactly the missing crates.)
+3. Versions move forward: crates.io never serves more than the base branch holds. `main` being ahead of crates.io is fine — that is a pending release, which the publish workflow completes on the next push to `main`.
 4. The PR's version is exactly one step above the base branch: next patch for a compatible release, next minor (or major) for a breaking one.
 
 So a feature branch carries the next version — exactly one step above `main` — from its first commit; a PR whose version does not sit one step above the base branch fails the gate. (Until a first version is published the crates.io checks are skipped with a warning.)
 
-## Releasing, step by step
+## Releasing, step by step (manual fallback)
 
 1. **Land all changes and go green.** `./test.sh` must pass; the working tree should be clean (publishing from a dirty tree needs `--allow-dirty` and is discouraged).
 
@@ -88,7 +96,7 @@ The third command's verification build pulls `packdiff-wasm` from the registry (
 5. **Tag and push.**
 
    ```console
-   $ git tag v X.Y.Z && git push --tags
+   $ git tag vX.Y.Z && git push --tags
    ```
 
 6. **Verify the published install path.**

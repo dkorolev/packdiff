@@ -62,7 +62,7 @@ $ packdiff --version
 packdiff 0.1.2
 ```
 
-From crates.io (once the crates are published there):
+From crates.io:
 
 ```console
 $ cargo install packdiff
@@ -76,13 +76,7 @@ $ cargo build --release            # builds the wasm module too (cli/build.rs)
 $ cargo install --path cli         # puts `packdiff` on your PATH
 ```
 
-To publish to crates.io (maintainer note; order matters — the CLI's build script pulls the wasm engine from the registry). The full playbook, including how the shared version is kept in one place, is in [PUBLISHING.md](PUBLISHING.md):
-
-```console
-$ cargo publish -p packdiff-dto
-$ cargo publish -p packdiff-wasm
-$ cargo publish -p packdiff
-```
+Publishing to crates.io is automated (maintainer note): merging a PR whose last commit bumps the workspace version publishes the crates in dependency order and tags the GitHub release. The full playbook, including the manual fallback and how the shared version is kept in one place, is in [PUBLISHING.md](PUBLISHING.md).
 
 To see it end to end without pointing at your own repo:
 
