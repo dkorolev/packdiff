@@ -219,9 +219,9 @@ test('viewed state and file search', async ({ page }) => {
 
 test('wrap toggle and theme preference', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.locator('#wrap-toggle').click();
-  await expect(page.locator('body')).toHaveClass(/wrap-lines/);
   await page.locator('#actions-menu').evaluate((el) => { el.open = true; });
+  await page.locator('#wrap-toggle').click({ force: true });
+  await expect(page.locator('body')).toHaveClass(/wrap-lines/);
   await page.locator('#theme-dark').click({ force: true });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
