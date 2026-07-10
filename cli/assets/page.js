@@ -1508,6 +1508,26 @@
 
   // ---- review summary drawer ----
   let summaryFocusReturn = null;
+  function focusableWithin(root) {
+    return Array.prototype.filter.call(root.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), ' +
+      'select:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+    (el) => !el.hidden && !el.closest('[hidden]'));
+  }
+  function trapDialogTab(ev, root) {
+    if (ev.key !== 'Tab') return false;
+    const items = focusableWithin(root);
+    if (!items.length) { ev.preventDefault(); return true; }
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (ev.shiftKey && document.activeElement === first) {
+      ev.preventDefault(); last.focus(); return true;
+    }
+    if (!ev.shiftKey && document.activeElement === last) {
+      ev.preventDefault(); first.focus(); return true;
+    }
+    return false;
+  }
   function summaryOpen() {
     const d = document.getElementById('summary-drawer');
     return d && !d.hidden && d.classList.contains('open');
@@ -1644,13 +1664,16 @@
   document.getElementById('summary-backdrop').addEventListener('click', closeSummary);
 
   // ---- keyboard help + navigation ----
+  let helpFocusReturn = null;
   function openHelp() {
     const d = document.getElementById('help-dialog');
+    helpFocusReturn = document.activeElement;
     d.hidden = false;
     document.getElementById('help-close').focus();
   }
   function closeHelp() {
     document.getElementById('help-dialog').hidden = true;
+    if (helpFocusReturn && helpFocusReturn.focus) helpFocusReturn.focus();
   }
   document.getElementById('help-open').addEventListener('click', openHelp);
   document.getElementById('help-close').addEventListener('click', closeHelp);
@@ -1696,6 +1719,10 @@
   }
 
   document.addEventListener('keydown', (ev) => {
+    const help = document.getElementById('help-dialog');
+    const summary = document.getElementById('summary-drawer');
+    if (!help.hidden && trapDialogTab(ev, help)) return;
+    if (summaryOpen() && trapDialogTab(ev, summary)) return;
     if (ev.key === 'Escape') {
       if (!document.getElementById('help-dialog').hidden) { closeHelp(); return; }
       if (summaryOpen()) { closeSummary(); return; }
@@ -1729,6 +1756,34 @@
   document.addEventListener('click', (ev) => {
     document.querySelectorAll('details.menu[open]').forEach((m) => {
       if (!m.contains(ev.target)) m.open = false;
+    });
+  });
+
+  // Native <details> handles disclosure; this supplies expected menu keyboard
+  // behavior for the menu items inside it.
+  document.querySelectorAll('details.menu').forEach((menu) => {
+    const summary = menu.querySelector('summary');
+    const items = () => focusableWithin(menu.querySelector('.menu-panel'));
+    summary.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ArrowDown' || ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        menu.open = true;
+        requestAnimationFrame(() => {
+          const list = items();
+          if (list[0]) list[0].focus();
+        });
+      }
+    });
+    menu.addEventListener('keydown', (ev) => {
+      const list = items();
+      const index = list.indexOf(document.activeElement);
+      if (ev.key === 'Escape') {
+        ev.preventDefault(); menu.open = false; summary.focus(); return;
+      }
+      if (index < 0 || (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp')) return;
+      ev.preventDefault();
+      const delta = ev.key === 'ArrowDown' ? 1 : -1;
+      list[(index + delta + list.length) % list.length].focus();
     });
   });
 
