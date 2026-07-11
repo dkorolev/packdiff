@@ -231,16 +231,37 @@
     return prefix + '[data-file="' + cssAttr(c.file) + '"]' +
       '[data-side="' + cssAttr(c.side) + '"][data-line="' + cssAttr(String(c.line)) + '"]';
   }
+  // Comment-anchor index: `file:side:line` → candidate elements, built once
+  // per render pass instead of one full-DOM attribute query per comment
+  // (which was O(comments × rows)). Split cells and unified rows are indexed
+  // separately; visibility is still resolved per lookup, so the "prefer a
+  // visible container" behavior is unchanged.
+  let anchorIndex = null;
+  function invalidateAnchorIndex() { anchorIndex = null; }
+  function buildAnchorIndex() {
+    anchorIndex = { rows: new Map(), cells: new Map() };
+    const put = (map, el) => {
+      const key = el.dataset.file + ':' + el.dataset.side + ':' + el.dataset.line;
+      const list = map.get(key);
+      if (list) list.push(el); else map.set(key, [el]);
+    };
+    document.querySelectorAll('tr.commentable').forEach((el) => put(anchorIndex.rows, el));
+    document.querySelectorAll('td.code.commentable').forEach((el) => put(anchorIndex.cells, el));
+  }
   function rowFor(c) {
+    if (!anchorIndex) buildAnchorIndex();
+    const key = c.file + ':' + c.side + ':' + String(c.line);
     if (document.body.classList.contains('view-split')) {
-      const cells = document.querySelectorAll(anchorSel('td.code.commentable', c));
+      const cells = anchorIndex.cells.get(key) || [];
       for (const cell of cells) {
         if (!cell.closest('[hidden]')) return cell.parentElement;
       }
-      return cells[0] ? cells[0].parentElement : null;
+      if (cells[0]) return cells[0].parentElement;
+      // No split cell yet (split tables build lazily): fall back to the
+      // unified row; comments re-place when this file's split is built.
     }
     // Prefer a row in a visible container (e.g. description Raw vs Preview).
-    const rows = document.querySelectorAll(anchorSel('tr.commentable', c));
+    const rows = anchorIndex.rows.get(key) || [];
     for (const row of rows) {
       if (!row.closest('[hidden]')) return row;
     }
@@ -344,6 +365,7 @@
   }
 
   function renderAll() {
+    invalidateAnchorIndex();
     document.querySelectorAll('tr.comment-row').forEach((el) => el.remove());
     document.querySelectorAll('.md-comments .comment-card').forEach((el) => el.remove());
     document.querySelectorAll('.md-comments').forEach((el) => { if (!el.children.length) el.remove(); });
@@ -1310,8 +1332,8 @@
     return split;
   }
 
-  function ensureSplitBuilt() {
-    document.querySelectorAll('table.diff.unified').forEach((u) => {
+  function buildSplitsIn(root) {
+    root.querySelectorAll('table.diff.unified').forEach((u) => {
       const scroll = u.parentElement;
       const wrap = scroll.classList.contains('diff-scroll') ? scroll.parentElement : scroll;
       if (!wrap.querySelector('table.diff.split')) {
@@ -1319,6 +1341,56 @@
         if (scroll.classList.contains('diff-scroll')) scroll.appendChild(split);
         else wrap.appendChild(split);
       }
+    });
+    invalidateAnchorIndex();
+  }
+  // Which table each wrap shows. A wrap whose split is not built yet keeps
+  // its unified table visible — panels are never empty; they swap when the
+  // observer builds their split.
+  function syncSplitDisplay(root) {
+    const split = document.body.classList.contains('view-split');
+    root.querySelectorAll('.diff-wrap').forEach((w) => {
+      const u = w.querySelector('table.diff.unified');
+      const s = w.querySelector('table.diff.split');
+      if (u) u.style.display = split && s ? 'none' : '';
+      if (s) s.style.display = split ? '' : 'none';
+    });
+  }
+  function replaceCommentsIn(file) {
+    const drafts = captureDrafts().filter((d) => d.anchor.file === file.dataset.anchor);
+    file.querySelectorAll('.pd-editor').forEach((el) => closeEditor(el));
+    file.querySelectorAll('tr.comment-row').forEach((el) => el.remove());
+    for (const c of doc.comments) {
+      if (c.file === file.dataset.anchor) placeComment(c);
+    }
+    restoreDrafts(drafts);
+  }
+  // Split tables double a file's diff DOM; building every file's at once is
+  // the biggest single main-thread stall on large reviews. Panels near the
+  // viewport build immediately; the observer builds the rest as they
+  // approach, then re-places that file's comments and open drafts.
+  let splitObserver = null;
+  function ensureSplitBuilt() {
+    document.querySelectorAll('table.diff.unified').forEach((u) => {
+      if (!u.closest('details.file')) {
+        const scroll = u.parentElement;
+        buildSplitsIn(scroll.classList.contains('diff-scroll') ? scroll.parentElement : scroll);
+      }
+    });
+    if (!splitObserver) {
+      splitObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          splitObserver.unobserve(entry.target);
+          if (!document.body.classList.contains('view-split')) continue;
+          buildSplitsIn(entry.target);
+          syncSplitDisplay(entry.target);
+          replaceCommentsIn(entry.target);
+        }
+      }, { rootMargin: '1200px 0px' });
+    }
+    document.querySelectorAll('#files-full details.file, #files-range details.file').forEach((f) => {
+      if (!f.querySelector('table.diff.split')) splitObserver.observe(f);
     });
   }
   function captureDrafts() {
@@ -1353,12 +1425,7 @@
     if (split) ensureSplitBuilt();
     const drafts = captureDrafts();
     closeEditors();
-    document.querySelectorAll('.diff-wrap').forEach((w) => {
-      const u = w.querySelector('table.diff.unified');
-      const s = w.querySelector('table.diff.split');
-      if (u) u.style.display = split ? 'none' : '';
-      if (s) s.style.display = split ? '' : 'none';
-    });
+    syncSplitDisplay(document);
     renderAll();
     restoreDrafts(drafts);
     updateCount();
@@ -1366,8 +1433,11 @@
 
   const viewToggle = document.getElementById('view-toggle');
   function workspaceWidth() {
-    const main = document.getElementById('content');
-    return main ? main.clientWidth : window.innerWidth;
+    // Measure the width the SPLIT layout would get. Unified mode caps
+    // main#content at 1400px — below the 90em threshold at default fonts —
+    // so measuring the current content width would disable the toggle
+    // everywhere, forever. Split mode relaxes the cap to 1920px.
+    return Math.min(document.documentElement.clientWidth || window.innerWidth, 1920);
   }
   function splitFits() {
     const fs = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;

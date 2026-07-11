@@ -147,9 +147,12 @@ fn collect_snapshots(
   }
   let ids: std::collections::BTreeSet<&String> = boundaries.iter().flat_map(|b| b.files.values()).collect();
   progress.stage(Stage::Snapshots, ids.len() as u64);
+  // One long-lived `cat-file --batch` child for the whole pass; per-blob
+  // progress ticks exactly as before.
+  let mut reader = git::BlobReader::new(repo)?;
   let mut blobs = std::collections::BTreeMap::new();
   for id in ids {
-    blobs.insert(id.clone(), git::blob_text(repo, id, MAX_SNAPSHOT_BLOB_BYTES)?);
+    blobs.insert(id.clone(), reader.blob_text(id, MAX_SNAPSHOT_BLOB_BYTES)?);
     progress.step(&format!("blob {}", &id[..id.len().min(8)]));
   }
   Ok(Some(RangeSnapshots { blobs, boundaries }))

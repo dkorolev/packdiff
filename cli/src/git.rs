@@ -333,14 +333,77 @@ pub fn tree_blobs(
   Ok(map)
 }
 
-/// A blob's content for snapshotting: `None` when it is not snapshot-worthy
-/// text (contains NUL, is not UTF-8, or exceeds `max_bytes`).
-pub fn blob_text(repo: &str, id: &str, max_bytes: usize) -> Result<Option<String>, CliError> {
-  let bytes = run_git_bytes(repo, &["cat-file", "blob", id])?;
-  if bytes.len() > max_bytes || bytes.contains(&0) {
-    return Ok(None);
+/// A long-lived `git cat-file --batch` channel: blob ids go in on stdin, raw
+/// contents stream back on stdout. One process spawn per snapshot pass
+/// instead of one per blob — process startup dominates blob reads on ranges
+/// touching many files. Tested through the snapshot path of the `cli.rs`
+/// end-to-end test (every snapshot blob flows through here).
+pub struct BlobReader {
+  child: std::process::Child,
+  stdin: std::process::ChildStdin,
+  stdout: std::io::BufReader<std::process::ChildStdout>,
+}
+
+impl BlobReader {
+  pub fn new(repo: &str) -> Result<Self, CliError> {
+    if VERBOSE.load(Ordering::Relaxed) {
+      eprintln!("packdiff: + git -C {repo} cat-file --batch (long-lived)");
+    }
+    let mut child = Command::new("git")
+      .arg("-C")
+      .arg(repo)
+      .args(["cat-file", "--batch"])
+      .stdin(Stdio::piped())
+      .stdout(Stdio::piped())
+      .stderr(Stdio::null())
+      .spawn()
+      .map_err(|e| CliError::Git { message: format!("failed to run git cat-file --batch: {e}") })?;
+    let stdin = child.stdin.take().expect("stdin was requested as piped");
+    let stdout = std::io::BufReader::new(child.stdout.take().expect("stdout was requested as piped"));
+    Ok(Self { child, stdin, stdout })
   }
-  Ok(String::from_utf8(bytes).ok())
+
+  /// A blob's content for snapshotting: `None` when it is not snapshot-worthy
+  /// text (contains NUL, is not UTF-8, or exceeds `max_bytes`).
+  pub fn blob_text(&mut self, id: &str, max_bytes: usize) -> Result<Option<String>, CliError> {
+    use std::io::{BufRead, Write};
+    let broken = |e: std::io::Error| CliError::Git { message: format!("cat-file --batch channel broke: {e}") };
+    writeln!(self.stdin, "{id}").map_err(broken)?;
+    self.stdin.flush().map_err(broken)?;
+    // Response: `<sha> <type> <size>\n<size bytes>\n`, or `<id> missing\n`.
+    let mut header = String::new();
+    self.stdout.read_line(&mut header).map_err(broken)?;
+    let mut fields = header.split_ascii_whitespace();
+    let (_sha, kind, size) = (fields.next(), fields.next(), fields.next());
+    if kind == Some("missing") || kind.is_none() {
+      return Err(CliError::Git { message: format!("cat-file --batch: no such blob {id}") });
+    }
+    let size: usize = size
+      .and_then(|s| s.parse().ok())
+      .ok_or_else(|| CliError::Git { message: format!("cat-file --batch: malformed header {header:?}") })?;
+    let mut bytes = vec![0_u8; size + 1]; // content plus the trailing newline
+    self.stdout.read_exact(&mut bytes).map_err(broken)?;
+    bytes.pop();
+    if bytes.len() > max_bytes || bytes.contains(&0) {
+      return Ok(None);
+    }
+    Ok(String::from_utf8(bytes).ok())
+  }
+}
+
+impl Drop for BlobReader {
+  fn drop(&mut self) {
+    // Closing stdin lets `cat-file --batch` exit on its own; kill is the
+    // backstop so a wedged child can never outlive the CLI.
+    let _ = self.child.kill();
+    let _ = self.child.wait();
+  }
+}
+
+/// One-shot variant for callers that need a single blob (the notes lift):
+/// spawns, reads, and tears down a batch channel for one id.
+pub fn blob_text(repo: &str, id: &str, max_bytes: usize) -> Result<Option<String>, CliError> {
+  BlobReader::new(repo)?.blob_text(id, max_bytes)
 }
 
 /// RFC 3339 UTC "now" with second precision (the model has no clock; the CLI

@@ -3,7 +3,7 @@
 // exercised. Requires: git, a built packdiff binary, and Playwright browsers.
 import { test, expect } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -301,4 +301,81 @@ test('light and dark screenshots (layout smoke)', async ({ page }) => {
   await page.locator('#theme-dark').click({ force: true });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.screenshot({ path: join(root, 'tmp', 'browser-dark.png'), fullPage: false });
+});
+
+// ---- large-review safeguards: a perf budget the suite enforces ----------
+// A deliberately large fixture (100 files × 80 changed lines). Regressions in
+// page size or load-path work are invisible on the small fixture until a user
+// hits them; these assertions are tripwires, not benchmarks.
+test.describe('large review', () => {
+  let large;
+
+  test.beforeAll(() => {
+    test.setTimeout(120_000);
+    const dir = mkdtempSync(join(tmpdir(), 'packdiff-browser-large-'));
+    const repo = join(dir, 'big');
+    mkdirSync(repo);
+    git(repo, ['init', '-q']);
+    git(repo, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+    write(repo, 'README.md', '# Big fixture\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-qm', 'initial']);
+    git(repo, ['checkout', '-qb', 'feature']);
+    const body = (i) => Array.from({ length: 80 }, (_, l) => `line ${l} of module ${i}: value = ${l * i};`).join('\n') + '\n';
+    for (let i = 0; i < 100; i++) write(repo, `src/mod_${String(i).padStart(3, '0')}.txt`, body(i));
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-qm', 'add one hundred modules']);
+    for (let i = 0; i < 10; i++) write(repo, `src/mod_${String(i).padStart(3, '0')}.txt`, body(i) + 'tail change\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-qm', 'touch ten modules']);
+    const out = join(dir, 'big-review.html');
+    const r = spawnSync(findBinary(), ['main', 'feature', '-C', repo, '-o', out], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`packdiff failed: ${r.stderr || r.stdout}`);
+    large = { dir, out, fileUrl: pathToFileURL(out).href };
+  });
+
+  test.afterAll(() => {
+    if (large?.dir) rmSync(large.dir, { recursive: true, force: true });
+  });
+
+  test('page byte size stays within budget; load reaches interactive promptly', async ({ page }) => {
+    test.setTimeout(60_000);
+    // ~8k changed lines should render to well under this; the budget trips on
+    // catastrophic regressions (double-embedded payloads, unbounded chrome).
+    expect(statSync(large.out).size).toBeLessThan(20 * 1024 * 1024);
+    const t0 = Date.now();
+    await page.goto(large.fileUrl);
+    await page.waitForFunction(() => {
+      const el = document.getElementById('comment-count');
+      return el && /comment/.test(el.textContent || '');
+    });
+    expect(Date.now() - t0).toBeLessThan(15_000);
+    // Navigation must work immediately: from the top, j lands on the next
+    // panel (index 1). Click the summary text, not `body` — the page is
+    // wall-to-wall diff lines and the whole line is a comment target.
+    await page.locator('.review-summary-text').click();
+    await page.keyboard.press('j');
+    await expect(page.locator('#files-full details.file').nth(1)).toBeFocused();
+  });
+
+  test('split tables build lazily, near the viewport only', async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.setViewportSize({ width: 1700, height: 900 });
+    await page.goto(large.fileUrl);
+    await page.waitForFunction(() => {
+      const el = document.getElementById('comment-count');
+      return el && /comment/.test(el.textContent || '');
+    });
+    await expect(page.locator('#view-toggle')).toBeEnabled();
+    await page.locator('#view-toggle').click();
+    // Panels build as they approach the viewport: scroll to the first panel
+    // and its split table appears…
+    await page.locator('#files-full details.file').first().scrollIntoViewIfNeeded();
+    await expect(page.locator('#files-full details.file').first().locator('table.diff.split')).toBeVisible();
+    // …while distant panels stay unbuilt (the whole point of laziness).
+    const built = await page.locator('table.diff.split').count();
+    const total = await page.locator('#files-full details.file').count();
+    expect(total).toBe(100);
+    expect(built).toBeLessThan(total);
+  });
 });

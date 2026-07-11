@@ -392,7 +392,27 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   let adds = doc.additions();
   let dels = doc.deletions();
 
-  let mut page = String::with_capacity(64 * 1024 + wasm_bytes.len() * 4 / 3);
+  // Escaped snapshots JSON is built up front so the page allocation below can
+  // account for it — on multi-MB reviews it dwarfs the fixed chrome.
+  let snap_json = doc.snapshots.as_ref().map(|snap| {
+    serde_json::to_string(snap)
+      .expect("RangeSnapshots serializes: string keys only, no fallible types")
+      .replace('<', "\\u003c")
+  });
+
+  // Size the page buffer from its real components (diff HTML, file list,
+  // embedded JSON, assets, base64 wasm) plus fixed chrome, so multi-MB pages
+  // do not realloc-copy their way up from 64 KB.
+  let mut page = String::with_capacity(
+    64 * 1024
+      + wasm_bytes.len() * 4 / 3
+      + CSS.len()
+      + JS.len()
+      + files_html.len()
+      + file_list_html.len()
+      + config_json.len()
+      + snap_json.as_ref().map_or(0, String::len),
+  );
   page.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
   page.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
   // Inline SVG favicon — a `❯` prompt chevron on a dark rounded tile, as a `data:` URI so the
@@ -519,10 +539,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   );
 
   page.push_str(&format!("<script type=\"application/json\" id=\"packdiff-config\">{config_json}</script>\n"));
-  if let Some(snap) = &doc.snapshots {
-    let snap_json = serde_json::to_string(snap)
-      .expect("RangeSnapshots serializes: string keys only, no fallible types")
-      .replace('<', "\\u003c");
+  if let Some(snap_json) = &snap_json {
     page.push_str(&format!("<script type=\"application/json\" id=\"packdiff-snapshots\">{snap_json}</script>\n"));
   }
   page.push_str(&format!(
