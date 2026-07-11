@@ -592,6 +592,10 @@ details.file {
   margin: 12px 0;
   scroll-margin-top: calc(var(--chrome-h) + 8px);
   background: var(--bg);
+  /* Skip layout and paint for off-screen panels; the intrinsic-size estimate
+     keeps the scrollbar stable and programmatic anchors reachable. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
 }
 details.file > summary.file-summary {
   cursor: pointer;
