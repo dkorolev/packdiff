@@ -485,6 +485,8 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <button type="button" id="copy-json" role="menuitem">Copy as JSON</button>
 <label class="btn" role="menuitem">Import JSON<input id="import-json" type="file" accept="application/json,.json" hidden></label>
 <h3>View</h3>
+<button type="button" id="expand-all" role="menuitem">Expand all files</button>
+<button type="button" id="collapse-all" role="menuitem">Collapse all files</button>
 <span class="menu-label">Theme</span>
 <span class="seg theme-seg" role="group" aria-label="Theme"><button type="button" id="theme-system">System</button><button type="button" id="theme-light">Light</button><button type="button" id="theme-dark">Dark</button></span>
 <button type="button" id="help-open" role="menuitem">Keyboard shortcuts (?)</button>

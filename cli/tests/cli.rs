@@ -144,7 +144,7 @@ fn end_to_end() {
   assert!(html.contains(r#"id="files-range""#));
   assert_eq!(html.matches(r#"class="copy-sha""#).count(), 2);
   assert_eq!(html.matches(r#"class="commit selectable""#).count(), 2);
-  for id in ["copy-json", "copy-md", "import-json"] {
+  for id in ["copy-json", "copy-md", "import-json", "expand-all", "collapse-all"] {
     assert!(html.contains(&format!("id=\"{id}\"")), "missing #{id}");
   }
   // The human-readable document and its one-row navigation are canonical.
