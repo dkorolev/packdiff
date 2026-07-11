@@ -307,30 +307,97 @@ pub fn changed_paths(repo: &str, lo: &str, hi: &str) -> Result<Vec<String>, CliE
   Ok(out.split('\0').filter(|s| !s.is_empty()).map(str::to_string).collect())
 }
 
-/// `path → blob id` at commit `sha`, for the given paths only. Paths absent
-/// (or not blobs — e.g. submodule pointers) at `sha` are simply missing from
-/// the map. Paths are chunked to keep the command line bounded.
-pub fn tree_blobs(
-  repo: &str, sha: &str, paths: &[String],
-) -> Result<std::collections::BTreeMap<String, String>, CliError> {
-  let mut map = std::collections::BTreeMap::new();
-  for chunk in paths.chunks(200) {
-    let mut args: Vec<&str> = vec!["ls-tree", "-r", "-z", sha, "--"];
-    args.extend(chunk.iter().map(String::as_str));
-    let out = run_git(repo, &args)?;
-    // Entries are NUL-terminated `<mode> <type> <id>\t<path>` records.
-    for entry in out.split('\0').filter(|s| !s.is_empty()) {
-      let Some((meta, path)) = entry.split_once('\t') else { continue };
-      let mut fields = meta.split(' ');
-      let (_mode, typ, id) = (fields.next(), fields.next(), fields.next());
-      if typ == Some("blob") {
-        if let Some(id) = id {
-          map.insert(path.to_string(), id.to_string());
+/// A long-lived `git cat-file --batch-check` channel: `<sha>:<path>` specs
+/// go in on stdin, `<oid> <type> <size>` headers come back — one process for
+/// every tree listing of a run instead of one `ls-tree` spawn per commit
+/// boundary. Requests are pipelined in bounded chunks so neither side's pipe
+/// buffer can fill and deadlock. Exercised by the snapshot path of the
+/// `cli.rs` end-to-end test (every boundary listing flows through here).
+pub struct TreeReader {
+  child: std::process::Child,
+  stdin: std::process::ChildStdin,
+  stdout: std::io::BufReader<std::process::ChildStdout>,
+}
+
+impl TreeReader {
+  pub fn new(repo: &str) -> Result<Self, CliError> {
+    if VERBOSE.load(Ordering::Relaxed) {
+      eprintln!("packdiff: + git -C {repo} cat-file --batch-check (long-lived)");
+    }
+    let mut child = Command::new("git")
+      .arg("-C")
+      .arg(repo)
+      .args(["cat-file", "--batch-check"])
+      .stdin(Stdio::piped())
+      .stdout(Stdio::piped())
+      .stderr(Stdio::null())
+      .spawn()
+      .map_err(|e| CliError::Git { message: format!("failed to run git cat-file --batch-check: {e}") })?;
+    let stdin = child.stdin.take().expect("stdin was requested as piped");
+    let stdout = std::io::BufReader::new(child.stdout.take().expect("stdout was requested as piped"));
+    Ok(Self { child, stdin, stdout })
+  }
+
+  /// `path → blob id` at commit `sha`, for the given paths only. Paths absent
+  /// (or not blobs — e.g. submodule pointers) at `sha` are simply missing
+  /// from the map. A path containing a newline cannot be requested over the
+  /// line protocol and is skipped; git forbids such tree entries on the
+  /// platforms packdiff targets.
+  pub fn tree_blobs(
+    &mut self, sha: &str, paths: &[String],
+  ) -> Result<std::collections::BTreeMap<String, String>, CliError> {
+    use std::io::{BufRead, Write};
+    let broken = |e: std::io::Error| CliError::Git { message: format!("cat-file --batch-check channel broke: {e}") };
+    let mut map = std::collections::BTreeMap::new();
+    // 512 specs per flush: responses are ~60 bytes, so a chunk's replies fit
+    // comfortably inside a pipe buffer while the next chunk is written.
+    for chunk in paths.chunks(512) {
+      let mut requested = Vec::with_capacity(chunk.len());
+      for path in chunk {
+        if path.contains('\n') {
+          continue;
+        }
+        writeln!(self.stdin, "{sha}:{path}").map_err(broken)?;
+        requested.push(path);
+      }
+      self.stdin.flush().map_err(broken)?;
+      for path in requested {
+        // Response: `<oid> <type> <size>`, or `<spec> missing` (the spec may
+        // itself contain spaces, so match `missing` from the end).
+        let mut line = String::new();
+        self.stdout.read_line(&mut line).map_err(broken)?;
+        if line.is_empty() {
+          return Err(CliError::Git { message: "cat-file --batch-check channel closed early".to_string() });
+        }
+        if line.trim_end().ends_with(" missing") {
+          continue;
+        }
+        let mut fields = line.split_ascii_whitespace();
+        let (oid, typ) = (fields.next(), fields.next());
+        if typ == Some("blob") {
+          if let Some(oid) = oid {
+            map.insert(path.clone(), oid.to_string());
+          }
         }
       }
     }
+    Ok(map)
   }
-  Ok(map)
+}
+
+impl Drop for TreeReader {
+  fn drop(&mut self) {
+    let _ = self.child.kill();
+    let _ = self.child.wait();
+  }
+}
+
+/// One-shot variant for callers that need a single listing (the notes lift):
+/// spawns, resolves, and tears down a batch-check channel for one commit.
+pub fn tree_blobs(
+  repo: &str, sha: &str, paths: &[String],
+) -> Result<std::collections::BTreeMap<String, String>, CliError> {
+  TreeReader::new(repo)?.tree_blobs(sha, paths)
 }
 
 /// A long-lived `git cat-file --batch` channel: blob ids go in on stdin, raw

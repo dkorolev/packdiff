@@ -27,6 +27,34 @@ fn content_fingerprint(bytes: &[u8]) -> String {
   format!("{hash:016x}")
 }
 
+/// Serialize straight into a `<script>`-safe JSON string: every `<` byte is
+/// emitted as the `\u003c` escape during serialization (identical after
+/// `JSON.parse`), so the data can never form `</script>` or any tag in the
+/// page. Single pass, one allocation — the multi-MB snapshots payload is
+/// never copied through an intermediate unescaped string. Escaping bytewise
+/// is sound: `<` is ASCII and UTF-8 continuation bytes never collide with it.
+fn script_safe_json<T: serde::Serialize>(value: &T) -> String {
+  struct ScriptSafe(Vec<u8>);
+  impl std::io::Write for ScriptSafe {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+      for &b in buf {
+        if b == b'<' {
+          self.0.extend_from_slice(b"\\u003c");
+        } else {
+          self.0.push(b);
+        }
+      }
+      Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+      Ok(())
+    }
+  }
+  let mut out = ScriptSafe(Vec::new());
+  serde_json::to_writer(&mut out, value).expect("embedded page JSON serializes: string keys only, no fallible types");
+  String::from_utf8(out.0).expect("serde_json emits UTF-8 and the escape is ASCII")
+}
+
 pub fn esc(s: &str) -> String {
   let mut out = String::with_capacity(s.len());
   for ch in s.chars() {
@@ -375,9 +403,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
       "generated_at": doc.generated_at,
       "review_id": review_id,
   });
-  // Every `<` in embedded JSON becomes the \u003c escape (identical after
-  // JSON.parse): the data can never form `</script>` or any tag in the page.
-  let config_json = config.to_string().replace('<', "\\u003c");
+  let config_json = script_safe_json(&config);
   let nfiles = doc.files.len();
   let files_html: String = if doc.files.is_empty() {
     r#"<p class="muted">No changes between these refs.</p>"#.to_string()
@@ -394,11 +420,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 
   // Escaped snapshots JSON is built up front so the page allocation below can
   // account for it — on multi-MB reviews it dwarfs the fixed chrome.
-  let snap_json = doc.snapshots.as_ref().map(|snap| {
-    serde_json::to_string(snap)
-      .expect("RangeSnapshots serializes: string keys only, no fallible types")
-      .replace('<', "\\u003c")
-  });
+  let snap_json = doc.snapshots.as_ref().map(script_safe_json);
 
   // Size the page buffer from its real components (diff HTML, file list,
   // embedded JSON, assets, base64 wasm) plus fixed chrome, so multi-MB pages
