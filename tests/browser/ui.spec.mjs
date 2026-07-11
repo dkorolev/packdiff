@@ -124,10 +124,18 @@ test('page is self-contained: no network requests after load', async ({ page }) 
 test('document summary and stable navigation are present without a sidebar', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(page.locator('#topnav.app-chrome')).toBeVisible();
+  await expect(page.locator('#review-back')).toHaveText('← Back');
   await expect(page.locator('.review-summary-text')).toBeVisible();
   await expect(page.locator('#sidebar')).toHaveCount(0);
   const firstFile = page.locator('#files-full details.file').first();
   await expect(firstFile).toBeAttached();
+});
+
+test('Back control returns to the page that opened the review', async ({ page }) => {
+  await page.goto('about:blank');
+  await page.goto(fixture.fileUrl);
+  await page.locator('#review-back').click();
+  await expect(page).toHaveURL('about:blank');
 });
 
 test('comment gutter creates, edits, and deletes a comment', async ({ page }) => {

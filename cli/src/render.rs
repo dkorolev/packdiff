@@ -467,6 +467,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 </header>
 <nav id="topnav" class="app-chrome" aria-label="Review navigation">
 <div class="chrome-links">
+<button type="button" id="review-back" title="Return to the page that opened this review">← Back</button>
 {desc_link}<a class="chrome-link" href="#commits">Commits</a>
 <a class="chrome-link" href="#files">Files changed</a>
 <a class="chrome-link" href="#diff">Diff</a>

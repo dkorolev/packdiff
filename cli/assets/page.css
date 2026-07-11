@@ -732,22 +732,24 @@ body.wrap-lines table.diff td.code {
 }
 table.diff td.ln {
   width: 1%;
-  min-width: 36px;
+  min-width: 28px;
+  padding-inline: 5px;
   text-align: right;
   color: var(--muted);
   user-select: none;
-  border-right: 1px solid var(--border);
   white-space: nowrap;
   opacity: 0.85;
 }
+/* The gutter and two line-number cells are one quiet margin, not three boxed
+   columns. A single edge where code begins is enough spatial structure. */
+table.diff.unified td.code { border-left: 1px solid var(--border); }
 table.diff td.gutter {
   width: 1%;
-  min-width: 28px;
-  padding: 0 2px;
+  min-width: 24px;
+  padding: 0 1px;
   text-align: center;
   user-select: none;
   vertical-align: middle;
-  border-right: 1px solid var(--border);
   background: transparent;
 }
 tr.add td { background: var(--add-bg); }
@@ -826,7 +828,6 @@ table.diff.split thead th {
 /* comments + editors */
 tr.comment-row td, tr.editor-row td {
   background: var(--comment-bg);
-  border-left: 3px solid var(--comment-rail);
   padding: 8px 12px;
   font-family: var(--ui-font);
   font-size: 13px;

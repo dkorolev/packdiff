@@ -83,6 +83,12 @@
   }
   function showError(message) { showToast(message, true); }
   document.getElementById('toast').addEventListener('click', (ev) => { ev.currentTarget.hidden = true; });
+  document.getElementById('review-back').addEventListener('click', () => {
+    // Review pages are normally opened from their owning job. Keep an explicit route
+    // back in the page chrome; a standalone exported page simply closes when permitted.
+    if (history.length > 1) history.back();
+    else window.close();
+  });
 
   // ---- browser preferences (not part of the review document) ----
   const DEFAULT_PREFS = {
