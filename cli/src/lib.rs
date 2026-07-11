@@ -139,9 +139,12 @@ fn collect_snapshots(
   // A boundary pair spanning a notes commit picks up the lifted notes file;
   // it must not resurface in sub-range diffs.
   let paths: Vec<String> = tracked.into_iter().filter(|p| Some(p.as_str()) != exclude).collect();
+  // One long-lived `cat-file --batch-check` child for every boundary listing;
+  // per-boundary progress ticks exactly as before.
+  let mut trees = git::TreeReader::new(repo)?;
   let mut boundaries = Vec::with_capacity(boundary_shas.len());
   for sha in &boundary_shas {
-    let files = git::tree_blobs(repo, sha, &paths)?;
+    let files = trees.tree_blobs(sha, &paths)?;
     progress.step(&format!("boundary {}", &sha[..7]));
     boundaries.push(Boundary { sha: sha.clone(), files });
   }
