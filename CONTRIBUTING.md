@@ -1,5 +1,7 @@
 # Contributing
 
+The house rules live in [`dkorolev/principles`](https://github.com/dkorolev/principles) — [`ENG-PRINCIPLES.md`](https://github.com/dkorolev/principles/blob/main/ENG-PRINCIPLES.md) for how everything here is built, and [`WEB-UI-PRINCIPLES.md`](https://github.com/dkorolev/principles/blob/main/WEB-UI-PRINCIPLES.md) for the generated review page. Linked, not copied: that repository is the one source of truth. Packdiff-specific product decisions and deliberately deferred ideas live in [`UI-CONCEPTS.md`](UI-CONCEPTS.md); they supplement the house rules rather than restating them.
+
 ## The two gates
 
 The full test pass (`./test.sh`: `cargo fmt --check`, debug tests, release tests, the Node wasm-ABI test, and Playwright browser UI tests) runs at exactly two points, and both must be green:
