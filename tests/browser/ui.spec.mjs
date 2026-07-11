@@ -368,10 +368,13 @@ test.describe('large review', () => {
     });
     await expect(page.locator('#view-toggle')).toBeEnabled();
     await page.locator('#view-toggle').click();
-    // Panels build as they approach the viewport: scroll to the first panel
-    // and its split table appears…
-    await page.locator('#files-full details.file').first().scrollIntoViewIfNeeded();
-    await expect(page.locator('#files-full details.file').first().locator('table.diff.split')).toBeVisible();
+    // Panels build as they approach the viewport. Scroll into the diff (the
+    // exact landing varies under content-visibility height estimates, so
+    // assert the invariants, not a specific panel): something near the
+    // viewport builds and swaps visible…
+    await page.locator('#files-full details.file').first().evaluate((el) => el.scrollIntoView({ block: 'start' }));
+    await page.waitForFunction(() => document.querySelectorAll('table.diff.split').length > 0);
+    await expect(page.locator('table.diff.split').first()).toBeVisible();
     // …while distant panels stay unbuilt (the whole point of laziness).
     const built = await page.locator('table.diff.split').count();
     const total = await page.locator('#files-full details.file').count();
