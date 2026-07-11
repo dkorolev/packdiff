@@ -4,7 +4,7 @@
 // not size (docs/ARCHITECTURE.md, "Web layer stance").
 //
 // This file owns presentation and browser state only: DOM assembly, event
-// wiring, and view preferences (sidebar, wrap, theme, viewed files, drafts —
+// wiring, and view preferences (per-file wrap, theme, viewed files, drafts —
 // a separate `…:prefs` localStorage record, never exported). Every
 // review-document read/mutation/export goes through the embedded WASM build
 // of packdiff-dto (`pd_*` calls). The litmus test for new code: if it would
@@ -53,8 +53,23 @@
     throw new Error(env.Error && env.Error.message ? env.Error.message : 'malformed engine response');
   }
 
-  const KEY = callWasm('pd_storage_key', META);
+  const KEY = 'packdiff:v1:diff:' + CONFIG.review_id;
   const PREF_KEY = KEY + ':prefs';
+  const ACT_KEY = KEY + ':activity';
+
+  // One-time migration from the pre-review_id storage key, so review state
+  // saved by earlier versions survives the identity change.
+  try {
+    if (localStorage.getItem(KEY) === null) {
+      const legacyKey = callWasm('pd_storage_key', META);
+      const legacyDoc = localStorage.getItem(legacyKey);
+      if (legacyDoc !== null) {
+        localStorage.setItem(KEY, legacyDoc);
+        const legacyPrefs = localStorage.getItem(legacyKey + ':prefs');
+        if (legacyPrefs !== null) localStorage.setItem(PREF_KEY, legacyPrefs);
+      }
+    }
+  } catch (e) { /* storage unavailable; initDoc() surfaces the warning */ }
 
   // ---- toast ----
   let toastTimer = 0;
@@ -73,10 +88,10 @@
   const DEFAULT_PREFS = {
     schema_version: 1,
     viewed_files: [],
-    sidebar_open: true,
-    wrap_lines: false,
+    nowrap_files: [],
+    collapsed_files: [],
+    markdown_views: {},
     theme: 'system',
-    hide_viewed: false,
     drafts: {},
     comment_hint_seen: false,
   };
@@ -94,10 +109,10 @@
         viewed_files: Array.isArray(parsed.viewed_files)
           ? parsed.viewed_files.filter((p) => typeof p === 'string')
           : [],
-        sidebar_open: parsed.sidebar_open !== false,
-        wrap_lines: !!parsed.wrap_lines,
+        nowrap_files: Array.isArray(parsed.nowrap_files) ? parsed.nowrap_files : [],
+        collapsed_files: Array.isArray(parsed.collapsed_files) ? parsed.collapsed_files : [],
+        markdown_views: parsed.markdown_views && typeof parsed.markdown_views === 'object' ? parsed.markdown_views : {},
         theme: (parsed.theme === 'light' || parsed.theme === 'dark') ? parsed.theme : 'system',
-        hide_viewed: !!parsed.hide_viewed,
         drafts: (parsed.drafts && typeof parsed.drafts === 'object') ? parsed.drafts : {},
         comment_hint_seen: !!parsed.comment_hint_seen,
       };
@@ -125,6 +140,7 @@
       prefs.drafts[k] = { text: text, editing: editingId || null };
     }
     savePrefs();
+    if (doc) updateCount();
   }
   function getDraft(anchor, editingId) {
     const d = prefs.drafts[draftKey(anchor, editingId)];
@@ -138,36 +154,8 @@
     if (prefs.theme === 'system') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.setAttribute('data-theme', prefs.theme);
   }
-  function applyWrap() {
-    document.body.classList.toggle('wrap-lines', prefs.wrap_lines);
-    const btn = document.getElementById('wrap-toggle');
-    if (btn) {
-      btn.setAttribute('aria-pressed', prefs.wrap_lines ? 'true' : 'false');
-      btn.textContent = prefs.wrap_lines ? 'Do not wrap lines' : 'Wrap long lines';
-    }
-  }
-  function applySidebarPref() {
-    const wide = window.matchMedia('(min-width: 961px)').matches;
-    if (wide) {
-      document.body.classList.toggle('sidebar-collapsed', !prefs.sidebar_open);
-      document.body.classList.remove('sidebar-open');
-      const bd = document.getElementById('sidebar-backdrop');
-      if (bd) bd.hidden = true;
-    } else {
-      document.body.classList.remove('sidebar-collapsed');
-      // drawer closed by default on medium/mobile
-    }
-    const t = document.getElementById('sidebar-toggle');
-    if (t) {
-      const open = wide ? prefs.sidebar_open : document.body.classList.contains('sidebar-open');
-      t.setAttribute('aria-expanded', open ? 'true' : 'false');
-    }
-  }
-
   loadPrefs();
   applyTheme();
-  applyWrap();
-  applySidebarPref();
 
   // ---- storage (review document) ----
   let doc = null;
@@ -186,15 +174,48 @@
     }
     return callWasm('pd_new_document', META);
   }
+  // ---- activity journal (material review changes; stable-ID operations) ----
+  // Stored under its own key: it is review material, not a view preference,
+  // and each entry is the operation (with what undo needs), never a document
+  // snapshot.
+  let activity = [];
+  try { activity = JSON.parse(localStorage.getItem(ACT_KEY)) || []; } catch (e) { activity = []; }
+  if (!Array.isArray(activity)) activity = [];
+  function saveActivity() {
+    if (memoryOnly) return;
+    try { localStorage.setItem(ACT_KEY, JSON.stringify(activity)); } catch (e) { /* keep in memory */ }
+  }
+  function pushActivity(entry) {
+    entry.id = genId();
+    entry.at = new Date().toISOString();
+    activity.push(entry);
+    saveActivity();
+  }
+
   function persist(next) {
+    if (doc) {
+      const before = {};
+      for (const c of doc.comments) before[c.id] = c;
+      const after = {};
+      for (const c of next.comments) after[c.id] = c;
+      for (const c of next.comments) {
+        if (!before[c.id]) pushActivity({ kind: 'comment_added', label: 'Comment added', comment_id: c.id });
+        else if (JSON.stringify(before[c.id]) !== JSON.stringify(c)) {
+          pushActivity({ kind: 'comment_updated', label: 'Comment updated', comment: before[c.id] });
+        }
+      }
+      for (const c of doc.comments) {
+        if (!after[c.id]) pushActivity({ kind: 'comment_deleted', label: 'Comment deleted', comment: c });
+      }
+    }
     doc = next;
     if (!memoryOnly) {
       try { localStorage.setItem(KEY, JSON.stringify(doc)); }
       catch (e) { showStorageWarning(); }
     }
     updateCount();
-    refreshSidebarMeta();
-    if (summaryOpen()) renderSummary();
+    syncViewedChecks();
+    renderActivity();
   }
   function saveDoc(next) {
     persist(next);
@@ -261,12 +282,12 @@
     return false;
   }
 
-  // ---- counts / sidebar meta ----
+  // ---- counts / per-file meta ----
   function updateCount() {
     const n = doc.comments.length;
     const label = n + ' comment' + (n === 1 ? '' : 's');
     const btn = document.getElementById('comment-count');
-    if (btn) btn.textContent = 'Review · ' + label;
+    if (btn) { btn.textContent = label; btn.hidden = n === 0; }
     // gutter badges
     document.querySelectorAll('.gutter-btn').forEach((btn) => {
       const file = btn.dataset.file;
@@ -301,32 +322,25 @@
           el.textContent = '';
         }
       }
+      const drafts = Object.keys(prefs.drafts).filter((key) => key.indexOf(anchor + ':') === 0).length;
+      const draftEl = panel.querySelector('[data-role="file-draft-count"]');
+      if (draftEl) {
+        draftEl.hidden = drafts === 0;
+        draftEl.textContent = drafts ? drafts + ' draft' + (drafts === 1 ? '' : 's') : '';
+      }
     });
+    const context = document.getElementById('current-file-context');
+    if (context && context.dataset.fileId) {
+      const current = document.getElementById(context.dataset.fileId);
+      context.dataset.fileId = '';
+      renderCurrentFile(current);
+    }
   }
 
-  function refreshSidebarMeta() {
-    const counts = {};
-    for (const c of doc.comments) {
-      counts[c.file] = (counts[c.file] || 0) + 1;
-    }
-    document.querySelectorAll('.sidebar-row').forEach((row) => {
-      const a = row.dataset.anchor;
-      const n = counts[a] || 0;
-      const el = row.querySelector('[data-role="comment-count"]');
-      if (el) el.textContent = n > 0 ? String(n) : '';
-      const viewed = prefs.viewed_files.indexOf(a) >= 0;
-      row.classList.toggle('viewed', viewed);
-    });
-    // sync viewed checkboxes
+  function syncViewedChecks() {
     document.querySelectorAll('.file-viewed').forEach((cb) => {
       cb.checked = prefs.viewed_files.indexOf(cb.dataset.anchor) >= 0;
     });
-    const total = document.querySelectorAll('#sidebar-list .sidebar-row').length;
-    const viewed = prefs.viewed_files.filter((p) =>
-      document.querySelector('.sidebar-row[data-anchor="' + cssAttr(p) + '"]')).length;
-    const prog = document.getElementById('viewed-progress');
-    if (prog) prog.textContent = viewed + ' of ' + total + ' files viewed';
-    applyFileFilter();
   }
 
   function renderAll() {
@@ -341,8 +355,59 @@
     }
     if (un.querySelector('.comment-card')) un.hidden = false;
     updateCount();
-    refreshSidebarMeta();
+    syncViewedChecks();
   }
+
+  function renderActivity() {
+    const count = document.getElementById('change-count');
+    const undo = document.getElementById('undo-change');
+    const body = document.getElementById('activity-body');
+    const entries = activity;
+    if (count) {
+      count.hidden = entries.length === 0;
+      count.textContent = entries.length + ' change' + (entries.length === 1 ? '' : 's');
+    }
+    if (undo) undo.disabled = entries.length === 0;
+    if (!body) return;
+    body.textContent = '';
+    if (!entries.length) { body.textContent = 'No review changes yet.'; return; }
+    const list = document.createElement('ol');
+    list.className = 'activity-list';
+    entries.slice().reverse().forEach((entry) => {
+      const item = document.createElement('li');
+      item.textContent = entry.label + ' · ' + entry.at;
+      list.appendChild(item);
+    });
+    body.appendChild(list);
+  }
+  document.getElementById('undo-change').addEventListener('click', () => {
+    const entry = activity.pop();
+    if (!entry) return;
+    if (entry.kind === 'viewed') {
+      const set = new Set(prefs.viewed_files);
+      if (entry.viewed) set.delete(entry.anchor); else set.add(entry.anchor);
+      prefs.viewed_files = Array.from(set);
+      savePrefs();
+    } else {
+      // Invert the journal operation through the same engine calls that made it.
+      let next;
+      try {
+        if (entry.kind === 'comment_added') next = callWasm('pd_delete_comment', JSON.stringify(doc), entry.comment_id);
+        else next = callWasm('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(entry.comment));
+      } catch (e) {
+        activity.push(entry);
+        showError('Undo failed: ' + e.message);
+        return;
+      }
+      doc = next;
+      if (!memoryOnly) {
+        try { localStorage.setItem(KEY, JSON.stringify(doc)); } catch (e) { showStorageWarning(); }
+      }
+    }
+    saveActivity();
+    renderAll(); renderActivity();
+    showToast('Last review change undone');
+  });
 
   function commentCard(c) {
     const wrap = document.createElement('div');
@@ -365,6 +430,12 @@
     del.type = 'button';
     del.textContent = 'Delete';
     del.addEventListener('click', () => {
+      if (del.dataset.confirm !== 'true') {
+        del.dataset.confirm = 'true';
+        del.textContent = 'Confirm delete';
+        del.classList.add('danger');
+        return;
+      }
       let next;
       try { next = callWasm('pd_delete_comment', JSON.stringify(doc), c.id); }
       catch (e) { showError('Delete failed: ' + e.message); return; }
@@ -414,8 +485,7 @@
     const un = document.getElementById('unanchored');
     if (!un.querySelector('.comment-card')) un.hidden = true;
     updateCount();
-    refreshSidebarMeta();
-    if (summaryOpen()) renderSummary();
+    syncViewedChecks();
   }
 
   // ---- editor ----
@@ -573,8 +643,7 @@
       closeEditor(host);
       placeComment(comment);
       updateCount();
-      refreshSidebarMeta();
-      if (summaryOpen()) renderSummary();
+      syncViewedChecks();
     }
     save.addEventListener('click', doSave);
     cancel.addEventListener('click', () => {
@@ -652,29 +721,32 @@
     }
   }
 
-  // Gutter buttons open editors (not whole-line clicks)
+  // The gutter is a visual affordance; the entire valid line is the target.
   document.addEventListener('click', (ev) => {
     const gbtn = ev.target.closest('.gutter-btn');
-    if (!gbtn) return;
+    const row = ev.target.closest('tr.commentable');
+    const blockEl = ev.target.closest('.md-block');
+    if (!gbtn && !row && !blockEl) return;
+    if (!gbtn && ev.target.closest('button, a, input, textarea, .comment-card, .pd-editor')) return;
     ev.preventDefault();
     ev.stopPropagation();
+    const source = gbtn || row || blockEl;
     const anchor = {
-      file: gbtn.dataset.file,
-      side: gbtn.dataset.side,
-      line: gbtn.dataset.line,
+      file: source.dataset.file,
+      side: source.dataset.side,
+      line: source.dataset.line,
     };
     if (!anchor.file) return;
-    if (gbtn.closest('#files-range')) {
+    if (source.closest('#files-range')) {
       showToast('The range view is read-only — comments attach to the full diff. Click “Show full diff” to comment.');
       return;
     }
-    const block = gbtn.closest('.md-block-wrap')
+    const block = blockEl || (gbtn && gbtn.closest('.md-block-wrap')
       ? gbtn.closest('.md-block-wrap').querySelector('.md-block')
-      : null;
+      : null);
     if (block) openNewComment(anchor, block);
     else {
-      const row = gbtn.closest('tr');
-      openNewComment(anchor, row);
+      openNewComment(anchor, row || gbtn.closest('tr'));
     }
   });
 
@@ -707,6 +779,9 @@
       b.classList.toggle('active', on);
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
+    const key = file ? file.dataset.anchor : '__description__';
+    prefs.markdown_views[key] = showPreview ? 'rendered' : 'source';
+    savePrefs();
     renderAll();
     restoreDrafts(drafts);
     window.scrollTo(0, scrollY);
@@ -741,8 +816,34 @@
     if (cb.checked) set.add(anchor);
     else set.delete(anchor);
     prefs.viewed_files = Array.from(set);
+    pushActivity({ kind: 'viewed', label: cb.checked ? 'File marked viewed' : 'File marked unviewed', anchor: anchor, viewed: cb.checked });
     savePrefs();
-    refreshSidebarMeta();
+    syncViewedChecks();
+    renderActivity();
+  });
+  document.addEventListener('toggle', (ev) => {
+    const file = ev.target.closest && ev.target.closest('details.file');
+    if (!file || ev.target !== file) return;
+    const set = new Set(prefs.collapsed_files);
+    if (file.open) set.delete(file.dataset.anchor); else set.add(file.dataset.anchor);
+    prefs.collapsed_files = Array.from(set);
+    savePrefs();
+  }, true);
+  document.addEventListener('click', (ev) => {
+    const count = ev.target.closest('.file-comment-count');
+    if (!count) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const file = count.closest('details.file');
+    file.open = true;
+    const first = Array.prototype.find.call(document.querySelectorAll(
+      'tr.comment-row, .md-comments .comment-card'), (el) => el.closest('details.file') === file);
+    if (first) {
+      const target = first.querySelector('.comment-card') || first;
+      first.scrollIntoView({ block: 'center' });
+      target.setAttribute('tabindex', '-1'); target.focus({ preventScroll: true });
+      target.classList.add('arrival-flash');
+      setTimeout(() => target.classList.remove('arrival-flash'), 950);
+    }
   });
 
   // ---- commit range filtering ----
@@ -762,11 +863,10 @@
       copyText(copy.closest('tr').dataset.sha, copy);
       return;
     }
-    if (ev.target.closest('input.commit-check')) return; // handled by change
     const row = ev.target.closest('tr.commit.selectable');
     if (!row || !SNAPSHOTS) return;
     const idx = Number(row.dataset.index);
-    if (ev.shiftKey && rangeFrom !== null) {
+    if (rangeFrom !== null && rangeFrom === rangeTo && idx !== rangeFrom) {
       setRange(Math.min(rangeFrom, idx), Math.max(rangeTo, idx));
     } else if (rangeFrom === idx && rangeTo === idx) {
       setRange(null, null);
@@ -774,29 +874,39 @@
       setRange(idx, idx);
     }
   });
-  document.addEventListener('change', (ev) => {
-    const cb = ev.target.closest('input.commit-check');
-    if (!cb || !SNAPSHOTS) return;
-    const idx = Number(cb.dataset.index);
-    const checked = Array.prototype.map.call(
-      document.querySelectorAll('input.commit-check:checked'),
-      (el) => Number(el.dataset.index)
-    ).sort((a, b) => a - b);
-    if (checked.length === 0) setRange(null, null);
-    else setRange(checked[0], checked[checked.length - 1]);
-    // keep contiguous selection if user checked one in middle of gap
-    if (checked.length && (rangeTo - rangeFrom + 1) !== checked.length) {
-      // fill visual checks for contiguous range
-      document.querySelectorAll('input.commit-check').forEach((el) => {
-        const i = Number(el.dataset.index);
-        el.checked = rangeFrom !== null && i >= rangeFrom && i <= rangeTo;
-      });
+  let dragRangeStart = null;
+  let dragRangeEnd = null;
+  function previewRange(from, to) {
+    const lo = Math.min(from, to), hi = Math.max(from, to);
+    document.querySelectorAll('tr.commit.selectable').forEach((row) => {
+      const index = Number(row.dataset.index);
+      row.classList.toggle('range-preview', index >= lo && index <= hi);
+    });
+  }
+  document.addEventListener('pointerdown', (ev) => {
+    const row = ev.target.closest('tr.commit.selectable');
+    if (!row || ev.target.closest('button')) return;
+    dragRangeStart = Number(row.dataset.index);
+    dragRangeEnd = dragRangeStart;
+  });
+  document.addEventListener('pointerover', (ev) => {
+    if (dragRangeStart === null) return;
+    const row = ev.target.closest('tr.commit.selectable');
+    if (!row) return;
+    dragRangeEnd = Number(row.dataset.index);
+    previewRange(dragRangeStart, dragRangeEnd);
+  });
+  document.addEventListener('pointerup', (ev) => {
+    if (dragRangeStart === null) return;
+    const start = dragRangeStart, end = dragRangeEnd;
+    dragRangeStart = dragRangeEnd = null;
+    document.querySelectorAll('.range-preview').forEach((row) => row.classList.remove('range-preview'));
+    if (start !== end) {
+      ev.preventDefault();
+      setRange(Math.min(start, end), Math.max(start, end));
+      history.pushState({ range: [Math.min(start, end), Math.max(start, end)] }, '', '#commits');
     }
   });
-  document.addEventListener('mousedown', (ev) => {
-    if (ev.shiftKey && ev.target.closest('tr.commit.selectable')) ev.preventDefault();
-  });
-
   const rangeReset = document.getElementById('range-reset');
   if (rangeReset) rangeReset.addEventListener('click', () => setRange(null, null));
   const rangePrev = document.getElementById('range-prev');
@@ -814,15 +924,6 @@
     else setRange(Math.min(n, rangeTo + 1), Math.min(n, rangeTo + 1));
   });
 
-  const FULL_COUNTS = {
-    files: document.getElementById('nav-files').textContent,
-    diff: document.getElementById('nav-diff').innerHTML,
-  };
-  function setNavCounts(filesText, diffHtml) {
-    document.getElementById('nav-files').textContent = filesText;
-    document.getElementById('nav-diff').innerHTML = diffHtml;
-  }
-
   function applyRange() {
     const bar = document.getElementById('range-bar');
     const fullFiles = document.getElementById('files-full');
@@ -834,8 +935,6 @@
       const on = rangeFrom !== null && i >= rangeFrom && i <= rangeTo;
       tr.classList.toggle('selected', on);
       tr.setAttribute('aria-selected', on ? 'true' : 'false');
-      const cb = tr.querySelector('input.commit-check');
-      if (cb) cb.checked = on;
     });
     if (rangeFrom === null) {
       if (bar) bar.hidden = true;
@@ -844,7 +943,6 @@
       if (rangedList) { rangedList.hidden = true; rangedList.textContent = ''; }
       fullFiles.style.display = '';
       if (fullList) fullList.style.display = '';
-      setNavCounts(FULL_COUNTS.files, FULL_COUNTS.diff);
       return;
     }
     let files;
@@ -874,8 +972,6 @@
       dels += f.deletions;
     });
     if (files.length && rangedList) rangedList.appendChild(list);
-    setNavCounts(String(files.length),
-      '<span class="adds">+' + adds + '</span> <span class="dels">−' + dels + '</span>');
     const shortOf = (i) =>
       document.querySelector('tr.commit[data-index="' + i + '"] code').textContent;
     const n = rangeTo - rangeFrom + 1;
@@ -1053,29 +1149,15 @@
     done();
   }
 
-  function exportJson() {
-    download(stem() + '.json', 'application/json',
-      callWasm('pd_export_json', JSON.stringify(doc)));
-  }
-  function exportMd() {
-    download(stem() + '.md', 'text/markdown',
-      callWasm('pd_export_markdown', JSON.stringify(doc)));
-  }
-  function exportCsv() {
-    download(stem() + '.csv', 'text/csv',
-      callWasm('pd_export_csv', JSON.stringify(doc)));
-  }
   function copyMd(btn) {
     copyText(callWasm('pd_export_markdown', JSON.stringify(doc)), btn);
   }
 
-  document.getElementById('export-json').addEventListener('click', exportJson);
-  document.getElementById('export-md').addEventListener('click', exportMd);
-  document.getElementById('export-csv').addEventListener('click', exportCsv);
   document.getElementById('copy-md').addEventListener('click', (ev) => copyMd(ev.target));
-  const summaryCopy = document.getElementById('summary-copy-md');
-  if (summaryCopy) summaryCopy.addEventListener('click', (ev) => copyMd(ev.target));
-
+  document.getElementById('copy-json').addEventListener('click', (ev) =>
+    copyText(callWasm('pd_export_json', JSON.stringify(doc)), ev.target));
+  // Import merges a copied/exported review back in — the pull half of the
+  // copy-as push paths. The engine's pd_merge keeps it deterministic.
   document.getElementById('import-json').addEventListener('change', (ev) => {
     const file = ev.target.files && ev.target.files[0];
     if (!file) return;
@@ -1294,11 +1376,10 @@
   function refreshToggle() {
     if (!viewToggle) return;
     const fits = splitFits();
-    viewToggle.hidden = !fits;
     viewToggle.disabled = !fits;
     viewToggle.title = fits
       ? 'Switch between unified and side-by-side diff'
-      : 'Workspace too narrow for side-by-side';
+      : 'Not enough horizontal space to render side-by-side';
     if (!fits && document.body.classList.contains('view-split')) {
       document.body.classList.remove('view-split');
       viewToggle.textContent = 'Side-by-side';
@@ -1314,22 +1395,32 @@
       viewToggle.setAttribute('aria-pressed', nowSplit ? 'true' : 'false');
       applyDiffView();
     });
-    window.addEventListener('resize', () => {
-      refreshToggle();
-      applySidebarPref();
-    });
+    window.addEventListener('resize', refreshToggle);
     refreshToggle();
   }
 
-  // wrap toggle
-  const wrapToggle = document.getElementById('wrap-toggle');
-  if (wrapToggle) {
-    wrapToggle.addEventListener('click', () => {
-      prefs.wrap_lines = !prefs.wrap_lines;
-      savePrefs();
-      applyWrap();
+  function applyFileWraps() {
+    document.querySelectorAll('details.file').forEach((file) => {
+      const nowrap = prefs.nowrap_files.indexOf(file.dataset.anchor) >= 0;
+      file.classList.toggle('nowrap-lines', nowrap);
+      const button = file.querySelector('.file-wrap-toggle');
+      if (button) {
+        button.textContent = nowrap ? 'Scroll' : 'Wrap';
+        button.setAttribute('aria-pressed', nowrap ? 'false' : 'true');
+      }
     });
   }
+  document.addEventListener('click', (ev) => {
+    const button = ev.target.closest('.file-wrap-toggle');
+    if (!button) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const file = button.closest('details.file');
+    const set = new Set(prefs.nowrap_files);
+    if (set.has(file.dataset.anchor)) set.delete(file.dataset.anchor);
+    else set.add(file.dataset.anchor);
+    prefs.nowrap_files = Array.from(set);
+    savePrefs(); applyFileWraps();
+  });
 
   // theme buttons
   function setTheme(t) {
@@ -1344,131 +1435,6 @@
   if (tl) tl.addEventListener('click', () => setTheme('light'));
   if (td) td.addEventListener('click', () => setTheme('dark'));
 
-  // ---- sidebar ----
-  function toggleSidebar() {
-    const wide = window.matchMedia('(min-width: 961px)').matches;
-    if (wide) {
-      prefs.sidebar_open = !prefs.sidebar_open;
-      savePrefs();
-      applySidebarPref();
-    } else {
-      const open = !document.body.classList.contains('sidebar-open');
-      document.body.classList.toggle('sidebar-open', open);
-      const bd = document.getElementById('sidebar-backdrop');
-      if (bd) bd.hidden = !open;
-      const t = document.getElementById('sidebar-toggle');
-      if (t) t.setAttribute('aria-expanded', open ? 'true' : 'false');
-      if (open) {
-        const close = document.getElementById('sidebar-close');
-        if (close) close.focus();
-      } else {
-        const t2 = document.getElementById('sidebar-toggle');
-        if (t2) t2.focus();
-      }
-    }
-  }
-  function closeSidebarDrawer() {
-    document.body.classList.remove('sidebar-open');
-    const bd = document.getElementById('sidebar-backdrop');
-    if (bd) bd.hidden = true;
-    const t = document.getElementById('sidebar-toggle');
-    if (t) {
-      t.setAttribute('aria-expanded', 'false');
-      t.focus();
-    }
-  }
-  document.getElementById('sidebar-toggle').addEventListener('click', toggleSidebar);
-  const sidebarClose = document.getElementById('sidebar-close');
-  if (sidebarClose) sidebarClose.addEventListener('click', closeSidebarDrawer);
-  const sidebarBd = document.getElementById('sidebar-backdrop');
-  if (sidebarBd) sidebarBd.addEventListener('click', closeSidebarDrawer);
-
-  document.getElementById('sidebar-list').addEventListener('click', (ev) => {
-    const row = ev.target.closest('.sidebar-row');
-    if (!row) return;
-    const id = 'file-' + row.dataset.fileIndex;
-    const el = document.getElementById(id);
-    if (el) {
-      el.open = true;
-      el.scrollIntoView({ block: 'start' });
-      history.replaceState(null, '', '#' + id);
-    }
-    if (!window.matchMedia('(min-width: 961px)').matches) closeSidebarDrawer();
-  });
-
-  // file search + filters
-  let activeFilter = 'all';
-  const fileSearch = document.getElementById('file-search');
-  function applyFileFilter() {
-    const q = (fileSearch && fileSearch.value || '').trim().toLowerCase();
-    let visible = 0;
-    document.querySelectorAll('#sidebar-list .sidebar-row').forEach((row) => {
-      const path = (row.dataset.path || '').toLowerCase();
-      const status = row.dataset.status;
-      const anchor = row.dataset.anchor;
-      const comments = doc
-        ? doc.comments.some((c) => c.file === anchor)
-        : false;
-      const viewed = prefs.viewed_files.indexOf(anchor) >= 0;
-      let ok = !q || path.indexOf(q) >= 0;
-      if (ok && activeFilter === 'M') ok = status === 'M';
-      else if (ok && activeFilter === 'A') ok = status === 'A';
-      else if (ok && activeFilter === 'D') ok = status === 'D';
-      else if (ok && activeFilter === 'R') ok = status === 'R';
-      else if (ok && activeFilter === 'comments') ok = comments;
-      else if (ok && activeFilter === 'unviewed') ok = !viewed;
-      if (ok && prefs.hide_viewed && viewed && activeFilter !== 'unviewed') ok = false;
-      row.hidden = !ok;
-      if (ok) visible++;
-    });
-    let empty = document.querySelector('#sidebar-list .sidebar-empty');
-    if (visible === 0) {
-      if (!empty) {
-        empty = document.createElement('div');
-        empty.className = 'sidebar-empty';
-        document.getElementById('sidebar-list').appendChild(empty);
-      }
-      empty.textContent = 'No files match.';
-      empty.hidden = false;
-    } else if (empty) {
-      empty.hidden = true;
-    }
-  }
-  if (fileSearch) fileSearch.addEventListener('input', applyFileFilter);
-  document.querySelectorAll('.sidebar-filters button').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      activeFilter = btn.dataset.filter;
-      document.querySelectorAll('.sidebar-filters button').forEach((b) => {
-        const on = b === btn;
-        b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      });
-      applyFileFilter();
-    });
-  });
-  const hideViewed = document.getElementById('hide-viewed');
-  if (hideViewed) {
-    hideViewed.addEventListener('click', () => {
-      prefs.hide_viewed = !prefs.hide_viewed;
-      savePrefs();
-      hideViewed.setAttribute('aria-pressed', prefs.hide_viewed ? 'true' : 'false');
-      applyFileFilter();
-    });
-    hideViewed.setAttribute('aria-pressed', prefs.hide_viewed ? 'true' : 'false');
-  }
-  const nextUnviewed = document.getElementById('next-unviewed');
-  if (nextUnviewed) {
-    nextUnviewed.addEventListener('click', () => {
-      const rows = document.querySelectorAll('#sidebar-list .sidebar-row');
-      for (const row of rows) {
-        if (row.hidden) continue;
-        if (prefs.viewed_files.indexOf(row.dataset.anchor) < 0) {
-          row.click();
-          return;
-        }
-      }
-      showToast('All visible files are viewed');
-    });
-  }
 
   // file scrollspy
   (function () {
@@ -1482,10 +1448,7 @@
       for (const p of panels()) {
         if (p.getBoundingClientRect().top <= top + 4) current = p;
       }
-      document.querySelectorAll('.sidebar-row').forEach((row) => {
-        const id = 'file-' + row.dataset.fileIndex;
-        row.classList.toggle('active', current && current.id === id);
-      });
+      renderCurrentFile(current);
       // chrome section links
       const links = document.querySelectorAll('#topnav a.chrome-link');
       const sections = Array.prototype.map.call(links, (a) => {
@@ -1498,6 +1461,8 @@
           if (s.sec.getBoundingClientRect().top <= top + 4) cur = s;
         }
         for (const s of sections) s.a.classList.toggle('active', s === cur);
+        const passiveId = current && cur.sec.id === 'diff' ? current.id : cur.sec.id;
+        if (passiveId && location.hash !== '#' + passiveId) history.replaceState(null, '', '#' + passiveId);
       }
     }
     window.addEventListener('scroll', () => {
@@ -1506,8 +1471,58 @@
     update();
   })();
 
-  // ---- review summary drawer ----
-  let summaryFocusReturn = null;
+  function renderCurrentFile(file) {
+    const host = document.getElementById('current-file-context');
+    if (!host) return;
+    const id = file ? file.id : '';
+    if (host.dataset.fileId === id) return;
+    host.dataset.fileId = id;
+    host.textContent = '';
+    if (!file) return;
+    const path = file.dataset.path || '';
+    const pathHost = document.createElement('span');
+    pathHost.className = 'context-path';
+    const pieces = path.split('/');
+    pieces.forEach((piece, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = (index ? '/' : '') + piece;
+      button.dataset.prefix = pieces.slice(0, index + 1).join('/');
+      pathHost.appendChild(button);
+    });
+    host.appendChild(pathHost);
+    const stats = document.createElement('span');
+    stats.className = 'context-stats';
+    stats.innerHTML = '<span class="adds">+' + file.dataset.adds + '</span> ' +
+      '<span class="dels">−' + file.dataset.dels + '</span>';
+    host.appendChild(stats);
+    const comments = doc ? doc.comments.filter((c) => c.file === file.dataset.anchor).length : 0;
+    if (comments) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'ghost context-comments';
+      button.textContent = comments + ' comment' + (comments === 1 ? '' : 's');
+      button.addEventListener('click', () => file.querySelector('.file-comment-count').click());
+      host.appendChild(button);
+    }
+    requestAnimationFrame(() => { pathHost.scrollLeft = pathHost.scrollWidth; });
+  }
+  document.getElementById('current-file-context').addEventListener('click', (ev) => {
+    const crumb = ev.target.closest('.context-path button');
+    if (!crumb) return;
+    const prefix = crumb.dataset.prefix;
+    const links = Array.prototype.filter.call(document.querySelectorAll('#filelist-full .fl-path a'),
+      (a) => a.textContent.indexOf(prefix + '/') === 0 || a.textContent === prefix);
+    if (!links.length) return;
+    const row = links[0].closest('tr');
+    row.scrollIntoView({ block: 'center' });
+    row.setAttribute('tabindex', '-1'); row.focus({ preventScroll: true });
+    for (const link of links) link.closest('tr').classList.add('arrival-flash');
+    setTimeout(() => links.forEach((link) => link.closest('tr').classList.remove('arrival-flash')), 950);
+    history.pushState(null, '', '#files');
+  });
+
+
+  // ---- keyboard help + navigation ----
   function focusableWithin(root) {
     return Array.prototype.filter.call(root.querySelectorAll(
       'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), ' +
@@ -1518,152 +1533,11 @@
     if (ev.key !== 'Tab') return false;
     const items = focusableWithin(root);
     if (!items.length) { ev.preventDefault(); return true; }
-    const first = items[0];
-    const last = items[items.length - 1];
-    if (ev.shiftKey && document.activeElement === first) {
-      ev.preventDefault(); last.focus(); return true;
-    }
-    if (!ev.shiftKey && document.activeElement === last) {
-      ev.preventDefault(); first.focus(); return true;
-    }
+    const first = items[0], last = items[items.length - 1];
+    if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); return true; }
+    if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); return true; }
     return false;
   }
-  function summaryOpen() {
-    const d = document.getElementById('summary-drawer');
-    return d && !d.hidden && d.classList.contains('open');
-  }
-  function openSummary() {
-    const drawer = document.getElementById('summary-drawer');
-    const bd = document.getElementById('summary-backdrop');
-    if (!drawer) return;
-    summaryFocusReturn = document.activeElement;
-    drawer.hidden = false;
-    bd.hidden = false;
-    requestAnimationFrame(() => drawer.classList.add('open'));
-    renderSummary();
-    const close = document.getElementById('summary-close');
-    if (close) close.focus();
-  }
-  function closeSummary() {
-    const drawer = document.getElementById('summary-drawer');
-    const bd = document.getElementById('summary-backdrop');
-    if (!drawer) return;
-    drawer.classList.remove('open');
-    drawer.hidden = true;
-    bd.hidden = true;
-    if (summaryFocusReturn) summaryFocusReturn.focus();
-  }
-  function renderSummary() {
-    const body = document.getElementById('summary-body');
-    if (!body) return;
-    body.textContent = '';
-    if (!doc.comments.length) {
-      const p = document.createElement('p');
-      p.className = 'summary-empty';
-      p.textContent = 'No comments yet. Use the + gutter on any line to add one.';
-      body.appendChild(p);
-      return;
-    }
-    // group by file, preserve model order within
-    const groups = new Map();
-    for (const c of doc.comments) {
-      if (!groups.has(c.file)) groups.set(c.file, []);
-      groups.get(c.file).push(c);
-    }
-    // unanchored first if any
-    const unanchored = [];
-    const anchoredGroups = new Map();
-    for (const [file, list] of groups) {
-      const a = [], u = [];
-      for (const c of list) {
-        if (rowFor(c) || blockFor(c)) a.push(c);
-        else u.push(c);
-      }
-      if (a.length) anchoredGroups.set(file, a);
-      for (const c of u) unanchored.push(c);
-    }
-    if (unanchored.length) {
-      const g = document.createElement('div');
-      g.className = 'summary-group';
-      const h = document.createElement('h3');
-      h.textContent = 'Unanchored';
-      g.appendChild(h);
-      for (const c of unanchored) g.appendChild(summaryItem(c, false));
-      body.appendChild(g);
-    }
-    for (const [file, list] of anchoredGroups) {
-      const g = document.createElement('div');
-      g.className = 'summary-group';
-      const h = document.createElement('h3');
-      h.textContent = file;
-      g.appendChild(h);
-      for (const c of list) g.appendChild(summaryItem(c, true));
-      body.appendChild(g);
-    }
-  }
-  function summaryItem(c, linkable) {
-    const item = document.createElement('div');
-    item.className = 'summary-item';
-    const meta = document.createElement('div');
-    meta.className = 'comment-meta';
-    if (linkable) {
-      const a = document.createElement('a');
-      a.href = '#';
-      a.textContent = c.side.toLowerCase() + ' line ' + c.line;
-      a.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        closeSummary();
-        const row = rowFor(c);
-        const block = blockFor(c);
-        const target = row || block;
-        if (target) {
-          const panel = target.closest('details.file');
-          if (panel) panel.open = true;
-          target.scrollIntoView({ block: 'center' });
-        }
-      });
-      meta.appendChild(a);
-      meta.appendChild(document.createTextNode(' · ' + c.updated_at));
-    } else {
-      meta.textContent = c.file + ' · ' + c.side.toLowerCase() + ' line ' + c.line +
-        ' · ' + c.updated_at + ' · not in this rendering';
-    }
-    const body = document.createElement('div');
-    body.className = 'comment-body';
-    try { body.innerHTML = callWasm('pd_markdown_html', c.text); }
-    catch (e) { body.textContent = c.text; }
-    const actions = document.createElement('div');
-    actions.className = 'comment-actions';
-    const edit = document.createElement('button');
-    edit.type = 'button';
-    edit.textContent = 'Edit';
-    edit.addEventListener('click', () => {
-      closeSummary();
-      openEditorFor(c);
-    });
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.textContent = 'Delete';
-    del.addEventListener('click', () => {
-      let next;
-      try { next = callWasm('pd_delete_comment', JSON.stringify(doc), c.id); }
-      catch (e) { showError('Delete failed: ' + e.message); return; }
-      persist(next);
-      removeCommentDom(c.id);
-      renderSummary();
-    });
-    actions.appendChild(edit);
-    actions.appendChild(del);
-    item.appendChild(meta);
-    item.appendChild(body);
-    item.appendChild(actions);
-    return item;
-  }
-  document.getElementById('comment-count').addEventListener('click', openSummary);
-  document.getElementById('summary-close').addEventListener('click', closeSummary);
-  document.getElementById('summary-backdrop').addEventListener('click', closeSummary);
-
-  // ---- keyboard help + navigation ----
   let helpFocusReturn = null;
   function openHelp() {
     const d = document.getElementById('help-dialog');
@@ -1701,7 +1575,9 @@
     const next = Math.max(0, Math.min(panels.length - 1, idx + delta));
     panels[next].open = true;
     panels[next].scrollIntoView({ block: 'start' });
-    history.replaceState(null, '', '#' + panels[next].id);
+    panels[next].setAttribute('tabindex', '-1');
+    panels[next].focus({ preventScroll: true });
+    history.pushState(null, '', '#' + panels[next].id);
   }
   function goComment(delta) {
     const cards = document.querySelectorAll(
@@ -1715,18 +1591,21 @@
       if (r.top <= mid) idx = i;
     }
     const next = Math.max(0, Math.min(list.length - 1, idx + delta));
+    // Land focus and the arrival cue on the card itself, not its table row.
+    const target = list[next].querySelector('.comment-card') || list[next];
     list[next].scrollIntoView({ block: 'center' });
+    target.setAttribute('tabindex', '-1');
+    target.focus({ preventScroll: true });
+    target.classList.add('arrival-flash');
+    setTimeout(() => target.classList.remove('arrival-flash'), 950);
   }
+  document.getElementById('comment-count').addEventListener('click', () => goComment(1));
 
   document.addEventListener('keydown', (ev) => {
     const help = document.getElementById('help-dialog');
-    const summary = document.getElementById('summary-drawer');
     if (!help.hidden && trapDialogTab(ev, help)) return;
-    if (summaryOpen() && trapDialogTab(ev, summary)) return;
     if (ev.key === 'Escape') {
       if (!document.getElementById('help-dialog').hidden) { closeHelp(); return; }
-      if (summaryOpen()) { closeSummary(); return; }
-      if (document.body.classList.contains('sidebar-open')) { closeSidebarDrawer(); return; }
       return;
     }
     if (isTypingTarget(ev.target)) return;
@@ -1736,20 +1615,6 @@
     if (ev.key === 'k') { ev.preventDefault(); goFile(-1); return; }
     if (ev.key === 'n') { ev.preventDefault(); goComment(1); return; }
     if (ev.key === 'p') { ev.preventDefault(); goComment(-1); return; }
-    if (ev.key === 'f') {
-      ev.preventDefault();
-      if (!window.matchMedia('(min-width: 961px)').matches) {
-        document.body.classList.add('sidebar-open');
-        const bd = document.getElementById('sidebar-backdrop');
-        if (bd) bd.hidden = false;
-      } else if (!prefs.sidebar_open) {
-        prefs.sidebar_open = true;
-        savePrefs();
-        applySidebarPref();
-      }
-      if (fileSearch) fileSearch.focus();
-      return;
-    }
   });
 
   // Close menus when clicking outside
@@ -1831,8 +1696,19 @@
   }
 
   doc = initDoc();
+  document.querySelectorAll('details.file').forEach((file) => {
+    file.open = prefs.collapsed_files.indexOf(file.dataset.anchor) < 0;
+  });
+  applyFileWraps();
+  document.querySelectorAll('.md-seg').forEach((seg) => {
+    const file = seg.closest('details.file');
+    const key = file ? file.dataset.anchor : '__description__';
+    if (prefs.markdown_views[key] === 'source') {
+      const source = seg.querySelector('[data-mdview="diff"], [data-mdview="raw"]');
+      if (source) source.click();
+    }
+  });
   renderAll();
-  // Don't auto-reopen every draft on load — only if single draft (less surprise)
-  const draftKeys = Object.keys(prefs.drafts);
-  if (draftKeys.length === 1) restorePersistedDrafts();
+  renderActivity();
+  restorePersistedDrafts();
 })();

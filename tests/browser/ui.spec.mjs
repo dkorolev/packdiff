@@ -98,6 +98,7 @@ test.afterAll(() => {
 });
 
 test.beforeEach(async ({ page, context }) => {
+  page.on('pageerror', (error) => console.error('pageerror:', error.stack));
   // Isolate localStorage between tests
   await context.clearCookies();
   await page.goto(fixture.fileUrl);
@@ -120,15 +121,13 @@ test('page is self-contained: no network requests after load', async ({ page }) 
   expect(external, `unexpected network: ${external.join(', ')}`).toEqual([]);
 });
 
-test('chrome and sidebar are present; first file is in view on desktop', async ({ page }) => {
+test('document summary and stable navigation are present without a sidebar', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(page.locator('#topnav.app-chrome')).toBeVisible();
-  await expect(page.locator('#sidebar')).toBeVisible();
-  await expect(page.locator('#sidebar-list .sidebar-row').first()).toBeVisible();
+  await expect(page.locator('.review-summary-text')).toBeVisible();
+  await expect(page.locator('#sidebar')).toHaveCount(0);
   const firstFile = page.locator('#files-full details.file').first();
-  await expect(firstFile).toBeVisible();
-  const box = await firstFile.boundingBox();
-  expect(box.y).toBeLessThan(800);
+  await expect(firstFile).toBeAttached();
 });
 
 test('comment gutter creates, edits, and deletes a comment', async ({ page }) => {
@@ -157,14 +156,17 @@ test('comment gutter creates, edits, and deletes a comment', async ({ page }) =>
   await page.locator('.pd-editor button.primary').click();
   await expect(page.locator('.comment-card').first()).toBeVisible();
   await expect(page.locator('#comment-count')).toContainText('1 comment');
-  // summary drawer
+  // The global count navigates directly to inline review data; no drawer.
   await page.locator('#comment-count').click();
-  await expect(page.locator('#summary-drawer.open')).toBeVisible();
-  await expect(page.locator('#summary-body .summary-item')).toHaveCount(1);
-  await page.locator('#summary-close').click();
-  // delete
-  await page.locator('.comment-card .comment-actions button', { hasText: 'Delete' }).click();
-  await expect(page.locator('#comment-count')).toContainText('0 comments');
+  await expect(page.locator('.comment-card').first()).toBeFocused();
+  // Deletion is an inline two-step mutation and remains undoable.
+  const del = page.locator('.comment-card .comment-actions button', { hasText: 'Delete' });
+  await del.click();
+  await expect(del).toContainText('Confirm delete');
+  await del.click();
+  await expect(page.locator('.comment-card')).toHaveCount(0);
+  await page.locator('#undo-change').click();
+  await expect(page.locator('.comment-card').first()).toBeVisible();
 });
 
 test('Preview/Diff pill switches without losing the panel', async ({ page }) => {
@@ -206,45 +208,44 @@ test('Preview/Diff expands a collapsed markdown file', async ({ page }) => {
   await expect(md.locator('.md-preview')).toBeVisible();
 });
 
-test('viewed state and file search', async ({ page }) => {
+test('viewed state persists without a duplicate file-search sidebar', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const cb = page.locator('#files-full details.file .file-viewed').first();
   await cb.check();
-  await expect(page.locator('#viewed-progress')).toContainText('1 of');
-  await page.locator('#file-search').fill('hello');
-  const visible = page.locator('#sidebar-list .sidebar-row:not([hidden])');
-  await expect(visible).toHaveCount(1);
-  await page.locator('#file-search').fill('');
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('.file-viewed'));
+  await expect(page.locator('#files-full details.file .file-viewed').first()).toBeChecked();
+  await expect(page.locator('#file-search')).toHaveCount(0);
 });
 
-test('wrap toggle and theme preference', async ({ page }) => {
+test('per-file wrapping and theme preference persist', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
+  const file = page.locator('#files-full details.file').first();
+  await file.locator('.file-wrap-toggle').click();
+  await expect(file).toHaveClass(/nowrap-lines/);
   await page.locator('#actions-menu').evaluate((el) => { el.open = true; });
-  await page.locator('#wrap-toggle').click({ force: true });
-  await expect(page.locator('body')).toHaveClass(/wrap-lines/);
   await page.locator('#theme-dark').click({ force: true });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
-test('commit range selection is visible and resettable', async ({ page }) => {
+test('commit range endpoint selection is visible and resettable', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const check = page.locator('input.commit-check').first();
-  if ((await check.count()) === 0) {
+  const rows = page.locator('tr.commit.selectable');
+  if ((await rows.count()) < 2) {
     test.skip(true, 'no selectable commits in fixture');
     return;
   }
-  await check.check();
+  await rows.nth(0).click();
+  await rows.nth(1).click();
   await expect(page.locator('#range-bar')).toBeVisible();
   await page.locator('#range-reset').click();
   await expect(page.locator('#range-bar')).toBeHidden();
 });
 
-test('mobile drawer and unified-only layout', async ({ page }) => {
+test('mobile keeps one navigation row and disables side-by-side', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });
-  await page.locator('#sidebar-toggle').click();
-  await expect(page.locator('body')).toHaveClass(/sidebar-open/);
-  await page.locator('#sidebar-close').click();
-  await expect(page.locator('body')).not.toHaveClass(/sidebar-open/);
+  await expect(page.locator('#sidebar-toggle')).toHaveCount(0);
+  await expect(page.locator('#view-toggle')).toBeDisabled();
 });
 
 test('keyboard help opens with ?', async ({ page }) => {
@@ -256,19 +257,8 @@ test('keyboard help opens with ?', async ({ page }) => {
   await expect(page.locator('#help-dialog')).toBeHidden();
 });
 
-test('dialogs trap focus and restore it when closed', async ({ page }) => {
+test('actions menu is keyboard complete', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const trigger = page.locator('#comment-count');
-  await trigger.focus();
-  await trigger.click();
-  await expect(page.locator('#summary-close')).toBeFocused();
-  await page.keyboard.press('Shift+Tab');
-  await expect(page.locator('#summary-copy-md')).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.locator('#summary-close')).toBeFocused();
-  await page.keyboard.press('Escape');
-  await expect(trigger).toBeFocused();
-
   await page.locator('#actions-menu summary').focus();
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('#copy-md')).toBeFocused();

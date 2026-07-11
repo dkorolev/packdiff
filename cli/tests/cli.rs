@@ -144,23 +144,23 @@ fn end_to_end() {
   assert!(html.contains(r#"id="files-range""#));
   assert_eq!(html.matches(r#"class="copy-sha""#).count(), 2);
   assert_eq!(html.matches(r#"class="commit selectable""#).count(), 2);
-  for id in ["export-json", "export-md", "export-csv", "copy-md", "import-json"] {
+  for id in ["copy-json", "copy-md", "import-json"] {
     assert!(html.contains(&format!("id=\"{id}\"")), "missing #{id}");
   }
-  // Compact chrome + sections: commits/files/diff remain in the document;
-  // the interactive file index lives in the sidebar (plus a no-JS fallback list).
+  // The human-readable document and its one-row navigation are canonical.
   assert!(html.contains(r#"id="topnav""#));
-  assert!(html.contains(r#"id="sidebar""#));
+  assert!(!html.contains(r#"id="sidebar""#));
+  assert!(html.contains(r#"class="review-summary-text""#));
   assert!(html.contains(r#"class="gutter-btn""#), "comment gutter buttons present");
   for id in ["commits", "files", "diff"] {
     assert!(html.contains(&format!("<section id=\"{id}\"")), "missing #{id} section");
   }
   assert!(html.contains(r##"href="#commits""##));
+  assert!(html.contains(r##"href="#files""##));
   assert!(html.contains(r##"href="#diff""##));
-  // One fallback index + one sidebar row + one diff panel per file (5 in the fixture).
+  // One canonical file index and one diff panel per file (5 in the fixture).
   assert_eq!(html.matches(r#"class="filelist""#).count(), 1);
   assert_eq!(html.matches("href=\"#file-").count(), 5);
-  assert_eq!(html.matches(r#"class="sidebar-row""#).count(), 5);
   assert_eq!(html.matches("<details class=\"file\" id=\"file-").count(), 5);
   // Side-by-side: a view toggle in the chrome (disabled until the JS enables it
   // on a wide-enough workspace) and every diff table wrapped for a split sibling.

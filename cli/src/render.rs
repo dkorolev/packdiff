@@ -16,6 +16,17 @@ use packdiff_dto::markdown;
 const CSS: &str = include_str!("../assets/page.css");
 const JS: &str = include_str!("../assets/page.js");
 
+/// Stable, dependency-free FNV-1a fingerprint for canonical serialized review
+/// content. This is an identity key, not a security boundary.
+fn content_fingerprint(bytes: &[u8]) -> String {
+  let mut hash = 0xcbf29ce484222325_u64;
+  for byte in bytes {
+    hash ^= u64::from(*byte);
+    hash = hash.wrapping_mul(0x100000001b3);
+  }
+  format!("{hash:016x}")
+}
+
 pub fn esc(s: &str) -> String {
   let mut out = String::with_capacity(s.len());
   for ch in s.chars() {
@@ -54,29 +65,19 @@ fn render_commits(doc: &DiffDocument) -> String {
   let mut out = String::new();
   if doc.snapshots.is_some() {
     out.push_str(
-      r#"<div class="hint"><strong>Inspect a commit or range.</strong> Select one commit, then Shift-click another to span a range. The filtered diff is read-only; return to the full diff to comment.</div>"#,
+      r#"<div class="hint"><strong>Inspect a commit or range.</strong> Click two endpoints or drag across commit rows. The filtered diff is read-only; return to the full diff to comment.</div>"#,
     );
   }
   out.push_str(r#"<table class="commits" role="grid" aria-label="Commits in range">"#);
   for (i, c) in doc.commits.iter().enumerate() {
-    let check = if doc.snapshots.is_some() {
-      format!(
-        r#"<td class="sel"><input type="checkbox" class="commit-check" data-index="{index}" aria-label="Select commit {short}"></td>"#,
-        index = i + 1,
-        short = esc(&c.short),
-      )
-    } else {
-      String::new()
-    };
     out.push_str(&format!(
-      r#"<tr class="commit{selectable}" data-index="{index}" data-sha="{sha}" aria-selected="false">{check}<td class="sha"><code>{short}</code><button class="copy-sha" type="button" title="Copy the full commit hash" aria-label="Copy full hash of {short}">copy</button></td><td class="subject">{subject}</td><td class="author">{author}</td><td class="date">{date}</td></tr>"#,
+      r#"<tr class="commit{selectable}" data-index="{index}" data-sha="{sha}" aria-selected="false" tabindex="0"><td class="sha"><code>{short}</code><button class="copy-sha" type="button" title="Copy the full commit hash" aria-label="Copy full hash of {short}">copy</button></td><td class="subject">{subject}</td><td class="author">{author}</td><td class="date">{date}</td></tr>"#,
       index = i + 1,
       sha = esc(&c.sha),
       short = esc(&c.short),
       subject = esc(&c.subject),
       author = esc(&c.author),
       date = esc(&c.date),
-      check = check,
     ));
   }
   out.push_str("</table>");
@@ -253,32 +254,6 @@ fn render_file_list(files: &[FileDiff]) -> String {
   out
 }
 
-/// Sidebar seed markup: one button per file; JS enriches counts / viewed state.
-fn render_sidebar_rows(files: &[FileDiff]) -> String {
-  if files.is_empty() {
-    return r#"<div class="sidebar-empty">No files changed.</div>"#.to_string();
-  }
-  let mut out = String::new();
-  for (i, f) in files.iter().enumerate() {
-    let path = f.display_path();
-    let letter = status_letter(f.status);
-    out.push_str(&format!(
-      r##"<button type="button" class="sidebar-row" data-file-index="{i}" data-anchor="{anchor}" data-path="{path}" data-status="{letter}" data-adds="{adds}" data-dels="{dels}" title="{path}" aria-label="{letter} {path}, +{adds} −{dels}">
-<span class="sb-status {letter}" aria-hidden="true">{letter}</span>
-<span class="sb-path">{path}</span>
-<span class="sb-meta"><span class="sb-comments" data-role="comment-count"></span><span class="adds">+{adds}</span> <span class="dels">−{dels}</span></span>
-</button>
-"##,
-      anchor = esc(f.anchor_path()),
-      path = esc(&path),
-      letter = letter,
-      adds = f.additions,
-      dels = f.deletions,
-    ));
-  }
-  out
-}
-
 /// Unified-table comment gutter cell for a commentable line.
 fn gutter_cell(anchor: &str, side: &str, line_no: u32) -> String {
   format!(
@@ -286,34 +261,18 @@ fn gutter_cell(anchor: &str, side: &str, line_no: u32) -> String {
   )
 }
 
-fn render_file(index: usize, f: &FileDiff, nfiles: usize) -> String {
+fn render_file(index: usize, f: &FileDiff, _nfiles: usize) -> String {
   let badge = status_badge(f.status);
   let notes: String = f.notes.iter().map(|n| format!(r#"<div class="muted note">{}</div>"#, esc(n))).collect();
   let renderable_markdown =
     is_markdown_path(f.anchor_path()) && !f.binary && f.status != FileStatus::Deleted && !f.hunks.is_empty();
   let toggle = if renderable_markdown {
-    r#"<span class="seg md-seg" role="group" aria-label="Markdown view"><button type="button" data-mdview="preview" class="active" aria-pressed="true">Preview</button><button type="button" data-mdview="diff" aria-pressed="false">Diff</button></span>"#
+    r#"<span class="seg md-seg" role="group" aria-label="Markdown view"><button type="button" data-mdview="preview" class="active" aria-pressed="true">Rendered</button><button type="button" data-mdview="diff" aria-pressed="false">Source</button></span>"#
   } else {
     ""
   };
   let path = f.display_path();
   let anchor_path = f.anchor_path();
-  let prev = if index > 0 {
-    format!(
-      r##"<button type="button" class="file-prev" data-target="file-{}" aria-label="Previous file">↑</button>"##,
-      index - 1
-    )
-  } else {
-    String::new()
-  };
-  let next = if index + 1 < nfiles {
-    format!(
-      r##"<button type="button" class="file-next" data-target="file-{}" aria-label="Next file">↓</button>"##,
-      index + 1
-    )
-  } else {
-    String::new()
-  };
 
   let body = if f.binary {
     r#"<p class="muted">Binary file — contents not shown.</p>"#.to_string()
@@ -370,11 +329,11 @@ fn render_file(index: usize, f: &FileDiff, nfiles: usize) -> String {
 <span class="file-left">{badge}<span class="path" title="{path}">{path}</span></span>
 <span class="file-right">
 {toggle}
+<button type="button" class="file-wrap-toggle" aria-pressed="true">Wrap</button>
 <span class="file-comment-count" data-role="file-comment-count" hidden></span>
+<span class="file-draft-count" data-role="file-draft-count" hidden></span>
 <span class="stats"><span class="adds">+{adds}</span> <span class="dels">−{dels}</span></span>
 <label class="viewed-label"><input type="checkbox" class="file-viewed" data-anchor="{anchor}" aria-label="Mark {path} as viewed"> Viewed</label>
-<button type="button" class="icon-btn copy-path" data-path="{path}" title="Copy path" aria-label="Copy path {path}">⎘</button>
-<span class="file-nav">{prev}{next}</span>
 </span>
 </summary>
 {notes}{body}
@@ -387,8 +346,6 @@ fn render_file(index: usize, f: &FileDiff, nfiles: usize) -> String {
     toggle = toggle,
     adds = f.additions,
     dels = f.deletions,
-    prev = prev,
-    next = next,
     notes = notes,
     body = body,
   )
@@ -397,6 +354,17 @@ fn render_file(index: usize, f: &FileDiff, nfiles: usize) -> String {
 pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -> String {
   let page_title =
     title.map(str::to_string).unwrap_or_else(|| format!("{}: {} → {}", doc.repo, doc.base.name, doc.head.name));
+  // Identity is the canonical reviewable diff content and nothing else: no
+  // refs, description, commit metadata, filename, or timestamp. Editing the
+  // description or rebasing to an identical diff keeps the same review_id, so
+  // saved local state survives; a different diff starts clean.
+  let identity = serde_json::json!({
+      "repo": doc.repo,
+      "files": doc.files,
+  });
+  let review_id = content_fingerprint(
+    serde_json::to_string(&identity).expect("review identity contains only serializable DTO fields").as_bytes(),
+  );
   let config = serde_json::json!({
       "tool": doc.tool,
       "schema_version": doc.schema_version,
@@ -405,6 +373,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
       "head": doc.head,
       "merge_base": doc.merge_base,
       "generated_at": doc.generated_at,
+      "review_id": review_id,
   });
   // Every `<` in embedded JSON becomes the \u003c escape (identical after
   // JSON.parse): the data can never form `</script>` or any tag in the page.
@@ -416,7 +385,6 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
     doc.files.iter().enumerate().map(|(i, f)| render_file(i, f, nfiles)).collect()
   };
   let file_list_html = render_file_list(&doc.files);
-  let sidebar_rows = render_sidebar_rows(&doc.files);
   let short = |sha: &str| sha[..sha.len().min(12)].to_string();
   let tool_label = format!("{} v{}", doc.tool, env!("CARGO_PKG_VERSION"));
   let ncommits = doc.commits.len();
@@ -443,52 +411,42 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
     if doc.description.is_some() { r##"<a class="chrome-link" href="#description">Description</a>"## } else { "" };
 
   page.push_str(&format!(
-    r##"<nav id="topnav" class="app-chrome" aria-label="Review chrome">
-<button type="button" id="sidebar-toggle" class="icon-btn" aria-expanded="true" aria-controls="sidebar" title="Toggle file list" aria-label="Toggle file list">☰</button>
-<div class="chrome-identity" title="{title}">
-<span class="repo">{repo}</span>
-<code>{base}</code>
-<span class="range-arrow">→</span>
-<code>{head}</code>
+    r##"<header class="review-intro">
+<p class="review-summary-text"><strong>{ncommits}</strong> commit(s) · <strong>{nfiles}</strong> file(s) changed · <span class="adds">+{adds}</span> <span class="dels">−{dels}</span> · click any diff line to comment (Markdown supported). Review state is saved locally for this exact diff.</p>
+<details class="review-details">
+<summary>Details</summary>
+<div class="details-grid">
+<span>Repository</span><span>{repo}</span><span>Base</span><code>{base} ({base_sha})</code>
+<span>Head</span><code>{head} ({head_sha})</code><span>Merge-base</span><code>{mb}</code>
+<span>Generated</span><span>{gen}</span><span>Tool</span><span>{tool}</span>
+<span>Schema</span><span>v{schema}</span>
 </div>
-<div class="chrome-stats">
-<span><strong id="nav-files">{nfiles}</strong> files</span>
-<span class="chrome-delta" id="nav-diff"><span class="adds">+{adds}</span> <span class="dels">−{dels}</span></span>
-<span class="muted" id="nav-commits" hidden>{ncommits}</span>
-</div>
-<div class="chrome-actions">
-{desc_link}
-<a class="chrome-link" href="#commits">Commits</a>
+</details>
+</header>
+<nav id="topnav" class="app-chrome" aria-label="Review navigation">
+<div class="chrome-links">
+{desc_link}<a class="chrome-link" href="#commits">Commits</a>
+<a class="chrome-link" href="#files">Files changed</a>
 <a class="chrome-link" href="#diff">Diff</a>
-<button type="button" id="comment-count" class="review-summary" aria-haspopup="dialog" aria-controls="summary-drawer">Review · 0 comments</button>
+</div>
+<div id="current-file-context" class="current-file-context" aria-live="polite"></div>
+<div class="chrome-actions">
+<button type="button" id="view-toggle" disabled aria-pressed="false" title="Not enough horizontal space to render side-by-side">Side-by-side</button>
+<button type="button" id="comment-count" class="review-summary" hidden>0 comments</button>
+<a id="change-count" class="chrome-link" href="#activity" hidden>0 changes</a>
+<button type="button" id="undo-change" disabled>Undo</button>
 <details class="menu" id="actions-menu">
 <summary aria-label="Review actions">Actions</summary>
 <div class="menu-panel" role="menu">
-<h3>Export / transfer</h3>
-<button type="button" id="copy-md" role="menuitem">Copy Markdown</button>
-<button type="button" id="export-json" role="menuitem">Export JSON</button>
-<button type="button" id="export-md" role="menuitem">Export Markdown</button>
-<button type="button" id="export-csv" role="menuitem">Export CSV</button>
+<h3>Copy / import review</h3>
+<button type="button" id="copy-md" role="menuitem">Copy as Markdown</button>
+<button type="button" id="copy-json" role="menuitem">Copy as JSON</button>
 <label class="btn" role="menuitem">Import JSON<input id="import-json" type="file" accept="application/json,.json" hidden></label>
 <h3>View</h3>
-<button type="button" id="view-toggle" role="menuitem" disabled aria-pressed="false">Side-by-side</button>
-<button type="button" id="wrap-toggle" role="menuitem" aria-pressed="false">Wrap long lines</button>
-<button type="button" id="theme-system" role="menuitem">Theme: System</button>
-<button type="button" id="theme-light" role="menuitem">Theme: Light</button>
-<button type="button" id="theme-dark" role="menuitem">Theme: Dark</button>
+<span class="menu-label">Theme</span>
+<span class="seg theme-seg" role="group" aria-label="Theme"><button type="button" id="theme-system">System</button><button type="button" id="theme-light">Light</button><button type="button" id="theme-dark">Dark</button></span>
 <button type="button" id="help-open" role="menuitem">Keyboard shortcuts (?)</button>
-</div>
-</details>
-<details class="menu" id="details-menu">
-<summary>Details</summary>
-<div class="menu-panel left">
-<div class="meta-row"><span>Repository</span><span>{repo}</span></div>
-<div class="meta-row"><span>Base</span><code>{base} ({base_sha})</code></div>
-<div class="meta-row"><span>Head</span><code>{head} ({head_sha})</code></div>
-<div class="meta-row"><span>Merge-base</span><code>{mb}</code></div>
-<div class="meta-row"><span>Generated</span><span>{gen}</span></div>
-<div class="meta-row"><span>Tool</span><span>{tool}</span></div>
-<div class="meta-row"><span>Schema</span><span>v{schema}</span></div>
+<div class="shortcut-note"><kbd>j</kbd>/<kbd>k</kbd> files · <kbd>n</kbd>/<kbd>p</kbd> comments · <kbd>?</kbd> help</div>
 </div>
 </details>
 </nav>
@@ -498,7 +456,6 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 </div>
 <div id="toast" hidden role="status" aria-live="polite"></div>
 "##,
-    title = esc(&page_title),
     repo = esc(&doc.repo),
     base = esc(&doc.base.name),
     base_sha = esc(&short(&doc.base.sha)),
@@ -515,44 +472,6 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
     dels = dels,
   ));
 
-  page.push_str(r#"<div class="workspace">"#);
-  page.push_str(
-    r#"<div id="sidebar-backdrop" hidden></div>
-<aside id="sidebar" aria-label="Files changed">
-<div class="sidebar-head">
-<span>Files</span>
-<button type="button" id="sidebar-close" class="icon-btn" aria-label="Close file list">✕</button>
-</div>
-<div class="sidebar-tools">
-<label class="visually-hidden" for="file-search">Search files</label>
-<input type="search" id="file-search" placeholder="Search files…" autocomplete="off">
-<div class="sidebar-filters" role="group" aria-label="File filters">
-<button type="button" data-filter="all" aria-pressed="true">All</button>
-<button type="button" data-filter="M" aria-pressed="false">Modified</button>
-<button type="button" data-filter="A" aria-pressed="false">Added</button>
-<button type="button" data-filter="D" aria-pressed="false">Deleted</button>
-<button type="button" data-filter="R" aria-pressed="false">Renamed</button>
-<button type="button" data-filter="comments" aria-pressed="false">Comments</button>
-<button type="button" data-filter="unviewed" aria-pressed="false">Unviewed</button>
-</div>
-</div>
-<div id="sidebar-list">
-"#,
-  );
-  page.push_str(&sidebar_rows);
-  page.push_str(
-    r#"</div>
-<div class="sidebar-foot">
-<div id="viewed-progress">0 of 0 files viewed</div>
-<div class="foot-actions">
-<button type="button" id="next-unviewed">Next unviewed</button>
-<button type="button" id="hide-viewed" aria-pressed="false">Hide viewed</button>
-</div>
-</div>
-</aside>
-"#,
-  );
-
   page.push_str(r#"<main id="content">"#);
   page.push_str(
     r#"<div id="unanchored" hidden><strong>Unanchored comments</strong> <span class="muted">(their diff lines are not in this rendering — e.g. regenerated with different context)</span></div>
@@ -560,7 +479,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   );
   if let Some(d) = &doc.description {
     page.push_str(
-      r#"<section id="description"><h2 class="desc-heading">Description <span class="seg md-seg desc-seg" role="group" aria-label="Description view"><button type="button" data-mdview="preview" class="active" aria-pressed="true">Preview</button><button type="button" data-mdview="raw" aria-pressed="false">Raw</button></span></h2>"#,
+      r#"<section id="description"><h2 class="desc-heading">Description <span class="seg md-seg desc-seg" role="group" aria-label="Description view"><button type="button" data-mdview="preview" class="active" aria-pressed="true">Rendered</button><button type="button" data-mdview="raw" aria-pressed="false">Source</button></span></h2>"#,
     );
     page.push_str(&render_description(d));
     page.push_str("</section>\n");
@@ -568,8 +487,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   page.push_str("<section id=\"commits\" class=\"collapsible-meta\"><h2>Commits</h2>");
   page.push_str(&render_commits(doc));
   page.push_str("</section>\n");
-  // Fallback file index for no-JS / print; interactive nav is the sidebar.
-  page.push_str("<section id=\"files\" class=\"fallback-files\"><h2>Files changed</h2>");
+  page.push_str("<section id=\"files\"><h2>Files changed</h2>");
   page.push_str("<div id=\"filelist-full\">");
   page.push_str(&file_list_html);
   page.push_str("</div><div id=\"filelist-range\" hidden></div>");
@@ -578,23 +496,8 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   page.push_str("<div id=\"files-full\">");
   page.push_str(&files_html);
   page.push_str("</div><div id=\"files-range\" hidden></div>");
-  page.push_str("</section>\n</main>\n</div>\n");
-
-  // Review summary drawer
-  page.push_str(
-    r#"<div id="summary-backdrop" hidden></div>
-<aside id="summary-drawer" hidden role="dialog" aria-modal="true" aria-labelledby="summary-title">
-<div class="summary-head">
-<h2 id="summary-title">Review summary</h2>
-<button type="button" id="summary-close" class="icon-btn" aria-label="Close review summary">✕</button>
-</div>
-<div class="summary-body" id="summary-body"></div>
-<div class="summary-foot">
-<button type="button" id="summary-copy-md" class="primary">Copy Markdown</button>
-</div>
-</aside>
-"#,
-  );
+  page.push_str("</section>\n");
+  page.push_str("<section id=\"activity\"><h2>Activity</h2><div id=\"activity-body\" class=\"muted\">No review changes yet.</div></section>\n</main>\n");
 
   // Keyboard help
   page.push_str(
