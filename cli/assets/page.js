@@ -1186,8 +1186,14 @@
     const reader = new FileReader();
     reader.onload = () => {
       try {
+        const before = doc.comments.length;
         saveDoc(callWasm('pd_merge', JSON.stringify(doc), String(reader.result)));
-        showToast('Imported comments');
+        // Report what landed and what did not anchor — comments outside this
+        // rendering must be visible, not silently parked.
+        const added = doc.comments.length - before;
+        const unanchored = document.querySelectorAll('#unanchored .comment-card').length;
+        showToast('Imported ' + added + ' comment' + (added === 1 ? '' : 's') +
+          (unanchored ? ' — ' + unanchored + ' outside this diff, shown at the top' : ''));
       } catch (e) {
         showError('Import failed: ' + e.message);
       }
@@ -1504,6 +1510,18 @@
   if (ts) ts.addEventListener('click', () => setTheme('system'));
   if (tl) tl.addEventListener('click', () => setTheme('light'));
   if (td) td.addEventListener('click', () => setTheme('dark'));
+
+  // Expand / collapse all file panels. Collapse state is deliberate view
+  // state (user data), so the bulk action writes prefs the same way the
+  // per-file toggles do.
+  function setAllFilesOpen(open) {
+    const files = document.querySelectorAll('#files-full details.file');
+    files.forEach((f) => { f.open = open; });
+    prefs.collapsed_files = open ? [] : Array.prototype.map.call(files, (f) => f.dataset.anchor);
+    savePrefs();
+  }
+  document.getElementById('expand-all').addEventListener('click', () => setAllFilesOpen(true));
+  document.getElementById('collapse-all').addEventListener('click', () => setAllFilesOpen(false));
 
 
   // file scrollspy

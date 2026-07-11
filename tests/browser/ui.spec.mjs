@@ -248,6 +248,25 @@ test('mobile keeps one navigation row and disables side-by-side', async ({ page 
   await expect(page.locator('#view-toggle')).toBeDisabled();
 });
 
+test('expand and collapse all files persist across restart', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const openCount = () => page.locator('#files-full details.file[open]').count();
+  const total = await page.locator('#files-full details.file').count();
+  await page.locator('#actions-menu').evaluate((el) => { el.open = true; });
+  await page.locator('#collapse-all').click({ force: true });
+  expect(await openCount()).toBe(0);
+  // Collapse state is deliberate view state: it survives a reload.
+  await page.reload();
+  await page.waitForFunction(() => {
+    const el = document.getElementById('comment-count');
+    return el && /comment/.test(el.textContent || '');
+  });
+  expect(await openCount()).toBe(0);
+  await page.locator('#actions-menu').evaluate((el) => { el.open = true; });
+  await page.locator('#expand-all').click({ force: true });
+  expect(await openCount()).toBe(total);
+});
+
 test('keyboard help opens with ?', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.locator('body').click();
