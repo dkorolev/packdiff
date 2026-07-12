@@ -154,8 +154,10 @@ Comments always sort by `(file, line, side, created_at, id)` with `old` before `
 
 ## Storage key
 
+The engine derives one key shape — `storage_key()`, exposed to the page as `pd_storage_key`:
+
 ```
 packdiff:v1:<repo>:<base-sha-12>..<head-sha-12>
 ```
 
-Derived by `storage_key()` (exposed to the page as `pd_storage_key`). The key pins exact endpoint SHAs on purpose: line numbers only mean something against the diff they were written on. Regenerating the identical diff (any title or context) finds the same comments; any new commit yields a fresh, empty store.
+This is the **legacy** page key. Generated pages now file review state under `packdiff:v1:diff:<review_id>`, where `review_id` is a render-time fingerprint of the canonical reviewable diff content (repository name plus the typed file diffs — not the refs, filename, title, or timestamp), embedded in the page config. An identical diff therefore keeps its state across renames, moves, and regenerations, while any content change starts a fresh store ([PAGE.md](PAGE.md#where-review-state-lives)). The SHA-pinned key remains exposed for the page's one-time migration of pre-`review_id` state.

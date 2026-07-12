@@ -21,12 +21,12 @@ Wrote review.html (12 files, +345 −67, 5 commits)
 
 Open `review.html` anywhere — from disk (`file://`), over any static host, or mailed to a colleague. The page makes **zero network requests**: CSS, the diff, and the comment engine are all inside the one file.
 
-- **Comment from the gutter** (`+` on every commentable line; Ctrl/Cmd+Enter saves; markdown with Write/Preview) — works in unified, split, and rendered Markdown. Comments persist in localStorage, keyed to the exact repo + commit SHAs.
-- **Review workspace layout**: compact sticky chrome, persistent file sidebar (search, filters, viewed progress), enriched file headers, and a review-summary drawer for the final pass before export.
-- **Markdown files render**: `.md` files open in the rendered view (added green, removed red); a **Preview | Diff** pill switches while preserving place.
-- **Filter by commits**: checkboxes or click/Shift-click select a commit or range (computed in-page by the WASM engine); range views are clearly read-only.
-- **Unified or side-by-side**, plus a **Wrap** preference; split enables when the workspace is wide enough.
-- **Export** the review as lossless JSON, Markdown, or CSV from the Actions menu or summary drawer — and **import** JSON back (merge by comment id, newer edit wins).
+- **Comment from the gutter** (`+` on every commentable line, or the line itself; Ctrl/Cmd+Enter saves; markdown with Write/Preview) — works in unified, split, and rendered Markdown. Comments persist in localStorage, keyed to the exact diff content, so a regenerated identical diff keeps them.
+- **Document-first layout**: a plain-language summary, then Description, Commits, Files changed, Diff, and Activity in one readable sequence; a single pinned navigation row tracks the current file (breadcrumbs, stats, comment count) as you scroll, with Undo and a review-change journal one click away.
+- **Markdown files render**: `.md` files open in the rendered view (added green, removed red); a **Rendered | Source** pill switches while preserving place.
+- **Filter by commits**: click two endpoints or drag across commit rows to select a commit or range (computed in-page by the WASM engine); range views are clearly read-only.
+- **Unified or side-by-side**, plus a per-file **Wrap | Scroll** choice; split enables when the workspace is wide enough.
+- **Copy** the review out as lossless JSON or Markdown from the Actions menu — and **import** JSON back (merge by comment id, newer edit wins).
 - **PR-style diffs by default**: `merge-base(BASE, HEAD)..HEAD`, so drift on the base branch doesn't pollute the review (`--no-merge-base` for the literal two-dot diff).
 - **A PR description panel**: commits authored by the notes author (`PACKDIFF_SYSTEM_USER_EMAIL`) are notes, not code — they are hidden from the page, and the `PR-DESCRIPTION.md` they committed renders as a commentable **Description** panel on top, like the pull request it will become.
 - **Live progress**: a progress bar with ETA at a terminal; in machine mode one `{ "Progress": ... }` JSON line per second on stderr, ending with `Done` — agents always know the stage and what remains.
@@ -36,7 +36,7 @@ Open `review.html` anywhere — from disk (`file://`), over any static host, or 
 
 The interesting part of the design: the **data model is one Rust crate, compiled twice**. The CLI links it natively to parse git output; every generated page carries it compiled to WebAssembly (~124 KB, base64-inlined, no wasm-bindgen, empty import object) as the in-browser comment engine. The page's JavaScript is a view layer only — validation, ordering, merge semantics, and export formats are defined once, in Rust, and run identically in tests, in the CLI, and in your browser.
 
-That boundary is deliberate and permanent: **strict Rust for the engine, vanilla JS for the player**. The player (`cli/assets/page.js`) owns presentation and browser state — DOM, events, sidebar/wrap/theme/drafts, localStorage — and stays framework-free and build-step-free; anything that touches review semantics lives in Rust and reaches the page only through the WASM ABI ([the stance, spelled out](docs/ARCHITECTURE.md#web-layer-stance)).
+That boundary is deliberate and permanent: **strict Rust for the engine, vanilla JS for the player**. The player (`cli/assets/page.js`) owns presentation and browser state — DOM, events, wrap/theme/viewed/drafts, localStorage — and stays framework-free and build-step-free; anything that touches review semantics lives in Rust and reaches the page only through the WASM ABI ([the stance, spelled out](docs/ARCHITECTURE.md#web-layer-stance)).
 
 ```
 packdiff/
@@ -62,7 +62,7 @@ Straight from this repository:
 ```console
 $ cargo install --git https://github.com/dkorolev/packdiff packdiff
 $ packdiff --version
-packdiff 0.2.4
+packdiff 0.3.7
 ```
 
 From crates.io:
@@ -128,7 +128,7 @@ std::fs::write("review.html", &out.html)?;
 
 ```toml
 [dependencies]
-packdiff = { version = "0.2", default-features = false }
+packdiff = { version = "0.3", default-features = false }
 ```
 
 `default-features = false` drops the binary-only terminal machinery (`indicatif`). The build-time wasm prerequisite above still applies, and `git` must be on `PATH` at run time. The typed data model is re-exported as `packdiff::dto`; progress can be observed by implementing `packdiff::progress::ProgressObserver` (`&()` observes nothing). `cargo run --example pack -- main` runs the [worked example](cli/examples/pack.rs), and consumers that only read packdiff's artifacts — exported comments, `--dump-json` documents — need just the pure-logic [`packdiff-dto`](dto/) crate.
@@ -156,9 +156,9 @@ Runs `cargo fmt --check`, the dto unit tests, the CLI integration tests (driving
 
 The same pass gates pushes (`git config core.hooksPath .githooks` enables the pre-push hook) and merges (GitHub Actions CI) — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Limitations (v0.1)
+## Limitations
 
-No syntax or word-level highlighting; the side-by-side view needs a wide-enough window; comments carry across regenerated diffs via export → import rather than automatically; localStorage is per-browser-profile by nature.
+No syntax or word-level highlighting; the side-by-side view needs a wide-enough window; comments carry across *changed* diffs via export → import (an identical regenerated diff keeps them automatically); localStorage is per-browser-profile by nature.
 
 ## License
 

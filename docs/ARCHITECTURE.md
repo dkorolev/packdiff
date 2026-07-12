@@ -48,14 +48,14 @@ The only prerequisite beyond stable Rust is the wasm32 std: `rustup target add w
 
 ## The generated page
 
-Authored frontend assets live in `cli/assets/page.css` and `cli/assets/page.js` and are embedded at compile time with `include_str!`. `render.rs` assembles a single HTML document containing, in order: inline CSS, the review chrome/sidebar/diff markup (all Git-derived strings HTML-escaped at render time), and script tags:
+Authored frontend assets live in `cli/assets/page.css` and `cli/assets/page.js` and are embedded at compile time with `include_str!`. `render.rs` assembles a single HTML document containing, in order: inline CSS, the review chrome and diff markup (all Git-derived strings HTML-escaped at render time), and script tags:
 
-1. `#packdiff-config` (`application/json`) — repo, refs+SHAs, merge-base (with `<` escaped to `\u003c`).
+1. `#packdiff-config` (`application/json`) — repo, refs+SHAs, merge-base, generation time, and the content-fingerprint `review_id` (with `<` escaped to `\u003c`).
 2. `#packdiff-snapshots` (optional) — commit-boundary blob snapshots for in-page range diffs.
 3. `#packdiff-wasm` (`application/wasm-base64`) — the module bytes.
-4. The view-layer JS: decode base64 → `WebAssembly.instantiate(bytes, {})` → derive the storage key via `pd_storage_key` → load/normalize the stored document via `pd_parse_document` → render comment rows; then delegate every user action to the corresponding `pd_*` call and re-render from its result.
+4. The view-layer JS: decode base64 → `WebAssembly.instantiate(bytes, {})` → derive the storage key from the config's `review_id` (migrating any legacy `pd_storage_key`-keyed store once) → load/normalize the stored document via `pd_parse_document` → render comment rows; then delegate every user action to the corresponding `pd_*` call and re-render from its result.
 
-UI preferences (sidebar, wrap, theme, viewed files, drafts) use a separate `…:prefs` localStorage record and never enter the portable review document.
+UI preferences (wrap, collapse state, Markdown views, theme, viewed files, drafts) use a separate `…:prefs` localStorage record, and the undo journal a `…:activity` record; neither enters the portable review document.
 
 Diff rows carry the anchor as data attributes (`data-file`, `data-side`, `data-line`), which is the entire coupling between the rendered diff and the review model. Comment creation targets the explicit gutter `+` control.
 
@@ -74,7 +74,7 @@ Each layer is tested through its real interface, and the heavier layers test the
 
 ## Web layer stance
 
-**Strict Rust for the engine, vanilla JS for the player.** The boundary is drawn by responsibility, not by size. The **engine** is everything with review semantics — validation, ordering, merge, exports, markdown, storage keys, range diffs — strongly-typed Rust in `packdiff-dto`, compiled to WASM for the page. The litmus test: if a behavior changes what an export contains or what a stored review document means, it is engine work and lands in Rust. The **player** — `cli/assets/page.js` — is deliberately vanilla JavaScript owning presentation and browser state only: DOM assembly, event wiring, view preferences (sidebar, wrap, theme, viewed files, drafts), localStorage I/O. The player may be substantial — a review workspace has a lot of view — but it stays framework-free, build-step-free, and semantics-free: it round-trips JSON through `pd_*` calls and never edits the review document itself. This split is a settled decision, not a migration way-station — the player is not waiting to be rewritten in `wasm-bindgen`.
+**Strict Rust for the engine, vanilla JS for the player.** The boundary is drawn by responsibility, not by size. The **engine** is everything with review semantics — validation, ordering, merge, exports, markdown, storage keys, range diffs — strongly-typed Rust in `packdiff-dto`, compiled to WASM for the page. The litmus test: if a behavior changes what an export contains or what a stored review document means, it is engine work and lands in Rust. The **player** — `cli/assets/page.js` — is deliberately vanilla JavaScript owning presentation and browser state only: DOM assembly, event wiring, view preferences (wrap, theme, viewed files, drafts), localStorage I/O. The player may be substantial — a review workspace has a lot of view — but it stays framework-free, build-step-free, and semantics-free: it round-trips JSON through `pd_*` calls and never edits the review document itself. This split is a settled decision, not a migration way-station — the player is not waiting to be rewritten in `wasm-bindgen`.
 
 ## External processes and liveness
 

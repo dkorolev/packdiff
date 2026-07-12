@@ -4,74 +4,89 @@ The HTML file packdiff writes is the whole product: one file, no server, no netw
 
 ## Layout
 
-- **Sticky chrome** — repository identity (`base → head`), live file and line-delta counts, comment count (opens the review summary), unified/side-by-side toggle, wrap preference, and menus for **Actions** (export/import, theme, shortcuts) and **Details** (full SHAs, merge-base, generation time, tool version).
-- **File sidebar** — persistent on wide screens (collapsible), drawer on medium/mobile. Search, status filters, comment counts, viewed checkboxes, and `N of M files viewed` progress. Click a row to jump to that file.
-- **Main workspace** — Description (when present), Commits, then the file diffs. The first changed file is near the top of a typical desktop viewport.
-- **Sticky file headers** — status, path, `+/−`, comment count, Markdown Preview/Diff, viewed checkbox, copy-path, and prev/next file controls.
+The review reads top to bottom as one document — summary first, then Description (when present), Commits, Files changed, Diff, Activity:
 
-A plain “Files changed” list remains in the document as a no-JavaScript fallback; with JS enabled, the sidebar is the primary navigator.
+- **Review summary** — a plain-language line (commit and file counts, `+/−` totals, how to comment) with a **Details** disclosure underneath (repository, refs with SHAs, merge-base, generation time, tool version, schema). Both scroll away.
+- **Pinned navigation** — the ONE row that stays: **← Back**, section links, the current file's context while you scroll the diff (path breadcrumbs, `+/−`, comment count), the **Side-by-side** toggle, the comment count (click steps to the next comment), the review-change count, **Undo**, and the **Actions** menu.
+- **Description** — the lifted PR description (the [notes-commit convention](CLI.md#the-notes-commit-convention)), a rendered card with no provenance chrome. A **Rendered | Source** pill switches to a line-numbered source view; both are commentable.
+- **Commits** — the commit table; rows become selectable for range filtering when snapshots are embedded.
+- **Files changed** — the file index (status, path, per-file `+/−`). This section IS the navigator; there is no separate sidebar.
+- **Diff** — one collapsible panel per file. Headers carry the status badge, path, the Markdown view pill (for `.md` files), **Wrap | Scroll**, comment and draft counts, `+/−`, and the **Viewed** checkbox.
+- **Activity** — the journal of review changes, newest first.
+
+Breadcrumb segments in the pinned row are actionable: selecting a directory lands on its rows in Files changed and briefly highlights them.
 
 ## Unified vs side-by-side
 
-The **Side-by-side** control toggles the whole diff between the default unified view and a two-column split (old on the left, new on the right). It is available only when the **diff workspace** is at least ~90em wide relative to the current font size; on narrow layouts the control is hidden. Commenting works in both views via the gutter. Split tables are built in the browser from the unified rows.
+**Side-by-side** toggles the whole diff between the default unified view and a two-column split (old on the left, new on the right). The control stays in place but is disabled — “Not enough horizontal space to render side-by-side” — until the workspace is at least ~90em wide at the current font size. Split tables are built in the browser from the unified rows, lazily, as file panels approach the viewport. Commenting works in both views.
 
-**Wrap** toggles between horizontal scrolling (default) and soft wrapping of long lines (`overflow-wrap: anywhere`, not `break-all`).
-
-## Filtering by commits
-
-When the range has two or more commits and snapshots are present:
-
-- Use the **checkbox** on a commit row (or click the row) to select it; Shift-click or multi-check spans a contiguous range.
-- **Prev / Next** on the range bar step through single commits.
-- **Show full diff** clears the selection.
-- Selection uses the accent color (not addition green). The bar shows `Showing commits i–j of N` and reminds you the sub-range is **read-only**.
-
-Sub-range diffs are computed inside the page (`pd_range_diff`). Comments attach only to the full diff.
+**Wrap | Scroll** is a per-file choice on each file header: long lines soft-wrap by default (`overflow-wrap: anywhere`, not `break-all`); Scroll switches that file to horizontal scrolling. The choice persists.
 
 ## Commenting
 
-1. Click the **`+` gutter** on a commentable line (or on a rendered Markdown block). An editor opens with Write/Preview tabs, an anchor header, and **Add comment** / **Cancel**.
+1. Click the **`+` gutter** — or anywhere on a commentable line, or on a rendered Markdown block; the gutter is a visual affordance, the entire valid line is the target. An editor opens with **Write | Preview** tabs and an anchor header.
 2. Type; **Ctrl/Cmd+Enter** saves, **Escape** cancels. Empty text is discarded. Comment text is **markdown**; Preview uses the same `pd_markdown_html` engine as saved cards.
-3. Saved comments appear under the line with Edit / Delete. Lines with comments show a count in the gutter.
-4. The chrome comment count opens the **Review summary** drawer: every comment once, grouped by file, with jump links and export.
+3. Saved comments appear under the line with **Edit** / **Delete**. Delete is a two-step inline confirm, and remains undoable.
+4. Lines with comments show a count in the gutter; file headers (and the pinned row's context) show per-file counts that jump to the file's first comment.
 
-Whole-line code clicks no longer open editors (so selecting text is safe). Unanchored comments appear in the summary and in an in-page unanchored section when their lines are missing from the rendering.
+Drafts persist per anchor in the browser-preferences record (never the portable review document): they survive view-mode switches and reloads, and reopen visibly at their anchors on load.
 
-Drafts survive view-mode switches and short reloads via a separate browser-preferences record (not the portable review document).
+Comments whose anchors are not in the current rendering (e.g. a page regenerated with different context) appear in an **Unanchored comments** section at the top, still editable and deletable.
+
+## Filtering by commits
+
+When the range has two or more commits, snapshots are embedded and commit rows become selectable:
+
+- **Click** a commit to inspect it alone; **click a second commit** to span the range between them; click the selected commit again to clear. **Press-and-drag** across rows selects a range in one gesture — the view applies when the gesture completes, with no separate Apply step.
+- **Prev / Next** on the range bar step through single commits; **Show full diff** clears the selection.
+- The bar shows `Showing commits i–j of N` and reminds you the sub-range is **read-only** — commenting there shows a toast pointing back to the full diff.
+
+Sub-range diffs are computed inside the page (`pd_range_diff` over the embedded snapshots — a pure Myers line diff). Renames are not re-detected within a sub-range: a rename shows as a delete plus an add.
+
+## Review changes, Activity, and Undo
+
+Material review changes — comments added, updated, or deleted, and files marked viewed — are journaled as stable-ID operations in their own `…:activity` record. The pinned row shows the change count (a link to the Activity section) and **Undo**, which inverts the most recent operation through the same engine calls that made it. View preferences (wrap, theme, collapse, drafts) are comfort state, not journal material.
 
 ## Review progress (viewed files)
 
-Mark a file **Viewed** on its header. State is local to this browser, keyed to the same repo + endpoint SHAs as comments, and is **not** exported with review feedback. Use **Next unviewed** and **Hide viewed** in the sidebar footer.
+Mark a file **Viewed** on its header. The state is local to this browser and is **not** exported with review feedback; toggles are journaled and undoable.
 
 ## Markdown
 
-Markdown appears in two places, both rendered by `packdiff-dto::markdown` (build-time for file previews; WASM `pd_markdown_html` for comments and editor preview):
+Markdown appears in three places, all rendered by `packdiff-dto::markdown` (build-time for file previews and the Description; WASM `pd_markdown_html` for comments and the editor preview):
 
-- **Comment bodies**
-- **Markdown files** — default to Preview; the **Preview | Diff** pill switches views while preserving scroll position approximately
-- **Description panel** — PR-like card when a notes commit is present; **Preview | Raw** switches between rendered markdown and the source (line-numbered, still commentable via gutters)
+- **Comment bodies.**
+- **Markdown files** — open in the **Rendered** view, built from the diff hunks (added runs tinted green, removed red); the **Rendered | Source** pill switches to the diff. The choice persists per file.
+- **The Description panel** — **Rendered | Source**, both commentable (rendered blocks anchor to the source line they start at).
 
-## Where comments live
+The dialect is deliberately a subset: ATX headings, fenced code blocks, flat (non-nested) lists, blockquotes, thematic breaks, paragraphs; inline `` `code` ``, `**bold**`, `*italic*`, and `[links](https://…)` (`http` / `https` / `mailto` targets only). Underscores are NOT emphasis, so `snake_case` identifiers survive verbatim. A single newline inside a paragraph is a hard break, matching how people write review comments. Every input character is HTML-escaped first — hostile input cannot smuggle markup or `javascript:` URLs.
 
-In this browser's localStorage, under `packdiff:v1:<repo>:<baseSha12>..<headSha12>` ([spec](DATA-MODEL.md#storage-key)).
+## Where review state lives
 
-UI preferences (sidebar open, wrap, theme, viewed files, drafts) use a sibling key `…:prefs` and never alter review JSON exports.
+All state is keyed by **review identity**: a fingerprint of the canonical reviewable diff content (repository name plus the typed file diffs — not the refs, filename, title, or generation timestamp), computed at build time and embedded in the page config as `review_id`. Renaming, moving, or regenerating the HTML for an identical diff finds the same state; a different diff starts clean — comments are never fuzzily relocated between diffs (carry them over with export → import instead).
 
-### Unanchored comments
+Three sibling localStorage records:
 
-Comments whose anchors are not in the current rendering stay editable/deletable in the review summary (and an in-page unanchored list).
+| Key | Contents |
+| --- | --- |
+| `packdiff:v1:diff:<review_id>` | The portable review document (comments) — what export/import round-trips ([spec](DATA-MODEL.md#reviewdocument)) |
+| `…:prefs` | Browser preferences: viewed files, per-file wrap, collapse state, Markdown view choices, theme, drafts. Never exported. |
+| `…:activity` | The review-change journal behind Undo and the Activity section |
 
-## Toolbar / Actions menu
+Pages generated before content-fingerprint identity keyed state by repo + endpoint SHAs (`packdiff:v1:<repo>:<baseSha12>..<headSha12>`, still derivable via `pd_storage_key`); the page migrates that state forward once, on first load.
+
+If localStorage is unavailable, a visible alert warns that comments last only for this page view — export before closing.
+
+## Actions menu
 
 | Action | Effect |
 | --- | --- |
-| **Copy Markdown** | Primary completion action (also in the summary drawer). |
-| **Export JSON** | Lossless, re-importable review document. |
-| **Export Markdown** | Comments grouped by file. |
-| **Export CSV** | RFC 4180 spreadsheet. |
-| **Import JSON** | Merge by comment id; newer `updated_at` wins. |
-
-Download names: `packdiff-comments-<repo>-<baseSha7>-<headSha7>.{json,md,csv}`.
+| **Copy as Markdown** | The review as Markdown, grouped by file, onto the clipboard — the primary completion action. |
+| **Copy as JSON** | The lossless, re-importable review document. |
+| **Import JSON** | Merge a review in by comment id; newer `updated_at` wins. The toast reports how many comments landed and how many fell outside this diff (those appear in the unanchored section). |
+| **Expand all / Collapse all** | Open or close every file panel; persisted, like per-file collapse. |
+| **Theme** | System (default, follows `prefers-color-scheme`) / Light / Dark. |
+| **Keyboard shortcuts** | Opens the shortcut reference (same as `?`). |
 
 ## Keyboard shortcuts
 
@@ -81,15 +96,14 @@ Press **`?`** when focus is not in an input:
 | --- | --- |
 | `j` / `k` | Next / previous file |
 | `n` / `p` | Next / previous comment |
-| `f` | Focus file search (opens the drawer on narrow layouts) |
 | `Esc` | Close dialogs / cancel editor |
 | Ctrl/⌘+Enter | Save comment |
 
-Every shortcut has a visible control equivalent.
+Every shortcut has a visible control equivalent, and single-key shortcuts are inert while typing.
 
-## Theme
+## Navigation behavior
 
-**Actions → Theme** offers System (default), Light, and Dark. System follows `prefers-color-scheme`.
+Explicit navigation (section links, breadcrumbs, comment jumps) scrolls to the exact target and pushes history; passive scrolling updates the URL fragment with `replaceState`, so a copied URL stays useful without polluting Back/Forward. Programmatic landings get a subtle, temporary highlight. The **← Back** control returns to the page that opened the review (or closes a standalone window when the browser permits).
 
 ## Browser support
 
