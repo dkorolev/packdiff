@@ -730,11 +730,6 @@
   }
 
   function openNewComment(anchor, hostRowOrBlock) {
-    // Warn if replacing a stored draft at a different editor for same anchor
-    const existingDraft = getDraft(anchor, null);
-    if (existingDraft && !findEditor(anchor, null)) {
-      // reopening the same draft is fine; no prompt
-    }
     if (hostRowOrBlock && hostRowOrBlock.classList && hostRowOrBlock.classList.contains('md-block')) {
       openPreviewEditor(hostRowOrBlock, anchor, null);
     } else if (hostRowOrBlock && hostRowOrBlock.tagName === 'TR') {
@@ -815,27 +810,6 @@
     window.scrollTo(0, scrollY);
   });
 
-  // File header controls
-  document.addEventListener('click', (ev) => {
-    const copy = ev.target.closest('button.copy-path');
-    if (copy) {
-      ev.preventDefault();
-      copyText(copy.dataset.path, copy);
-      return;
-    }
-    const nav = ev.target.closest('.file-prev, .file-next');
-    if (nav) {
-      ev.preventDefault();
-      const id = nav.dataset.target;
-      const el = document.getElementById(id);
-      if (el) {
-        el.open = true;
-        el.scrollIntoView({ block: 'start' });
-        history.replaceState(null, '', '#' + id);
-      }
-      return;
-    }
-  });
   document.addEventListener('change', (ev) => {
     const cb = ev.target.closest('.file-viewed');
     if (!cb) return;
@@ -1141,19 +1115,6 @@
   }
 
   // ---- exports ----
-  function download(name, mime, text) {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([text], { type: mime }));
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  }
-  function stem() {
-    return 'packdiff-comments-' + CONFIG.repo + '-' +
-      CONFIG.base.sha.slice(0, 7) + '-' + CONFIG.head.sha.slice(0, 7);
-  }
   function copyText(text, btn) {
     const done = () => {
       if (!btn) { showToast('Copied'); return; }
