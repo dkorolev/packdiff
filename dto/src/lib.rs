@@ -81,13 +81,13 @@ pub enum ModelError {
   InvalidRange(String),
 }
 
-/// The localStorage key a review document is filed under.
-///
-/// The key pins the exact endpoint SHAs on purpose: line numbers are only
-/// meaningful against the diff they were written on. Regenerating the same
-/// diff finds the same comments; new commits get a fresh store (carry
-/// comments over with export → import, where [`review::ReviewDocument::merge`]
-/// applies).
+/// The LEGACY localStorage key a review document was filed under, exposed to
+/// the page as `pd_storage_key` and consulted once per load to migrate old
+/// state. Pages now key state by `review_id` — a render-time fingerprint of
+/// the canonical diff content (see `cli/src/render.rs` and docs/PAGE.md) —
+/// so an identical regenerated diff keeps its comments. Carrying comments
+/// across a CHANGED diff remains export → import, where
+/// [`review::ReviewDocument::merge`] applies.
 pub fn storage_key(repo: &str, base_sha: &str, head_sha: &str) -> String {
   fn short(sha: &str) -> &str {
     &sha[..sha.len().min(12)]

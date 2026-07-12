@@ -55,7 +55,7 @@ API (all return the packed-u64 envelope; `meta` and `doc`/`comment`/`incoming` a
 | `pd_export_csv` | `doc` | RFC 4180 CSV **string** |
 | `pd_range_diff` | `snapshots` (a `RangeSnapshots` JSON), `params` (`{"from": i, "to": j, "context": n}`, boundary indices with `from < to`) | `FileDiff` **array** — the sub-range diff, same shape as the build-time parser's output |
 | `pd_markdown_html` | `text` *(raw markdown, not JSON)* | safe-HTML **string** (the markdown subset in docs/PAGE.md; all input escaped, `http`/`https`/`mailto` links only; never fails) |
-| `pd_storage_key` | `meta` | localStorage key **string** |
+| `pd_storage_key` | `meta` | legacy SHA-pinned localStorage key **string** — pages now key state by the content-fingerprint `review_id` and call this once to migrate old state ([PAGE.md](PAGE.md#where-review-state-lives)) |
 
 `meta` shape (used by `pd_new_document` and `pd_storage_key`):
 

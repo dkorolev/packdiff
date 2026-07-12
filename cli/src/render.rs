@@ -552,7 +552,6 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <dl>
 <dt>j / k</dt><dd>Next / previous file</dd>
 <dt>n / p</dt><dd>Next / previous comment</dd>
-<dt>f</dt><dd>Focus file search</dd>
 <dt>?</dt><dd>Show this help</dd>
 <dt>Esc</dt><dd>Close dialogs / cancel editor</dd>
 <dt>Ctrl/⌘+Enter</dt><dd>Save comment</dd>

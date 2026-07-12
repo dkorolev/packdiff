@@ -202,7 +202,9 @@ pub extern "C" fn pd_markdown_html(text_ptr: *const u8, text_len: u32) -> u64 {
   ok(serde_json::Value::String(packdiff_dto::markdown::to_html(&read_arg(text_ptr, text_len))))
 }
 
-/// `meta` as in [`pd_new_document`]; returns the localStorage key string.
+/// `meta` as in [`pd_new_document`]; returns the legacy SHA-pinned
+/// localStorage key string. Pages now key state by the content-fingerprint
+/// `review_id` and call this once to migrate pre-`review_id` state.
 #[no_mangle]
 pub extern "C" fn pd_storage_key(meta_ptr: *const u8, meta_len: u32) -> u64 {
   #[derive(serde::Deserialize)]
