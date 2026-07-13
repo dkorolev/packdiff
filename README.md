@@ -25,7 +25,7 @@ Open `review.html` anywhere — from disk (`file://`), over any static host, or 
 - **Document-first layout**: a plain-language summary, then Description, Commits, Files changed, Diff, and Activity in one readable sequence; a single pinned navigation row tracks the current file (breadcrumbs, stats, comment count) as you scroll, with Undo and a review-change journal one click away.
 - **Markdown files render**: `.md` files open in the rendered view (added green, removed red); a **Rendered | Source** pill switches while preserving place.
 - **Filter by commits**: click two endpoints or drag across commit rows to select a commit or range (computed in-page by the WASM engine); range views are clearly read-only.
-- **Unified or side-by-side**, plus a per-file **Wrap | Scroll** choice; split enables when the workspace is wide enough.
+- **Unified or side-by-side**, plus a per-file **Wrap | Scroll** choice; split enables when the workspace is wide enough. Hunk gaps **expand in place** — 20 unchanged lines per click, commentable like any other line.
 - **Copy** the review out as lossless JSON or Markdown from the Actions menu — and **import** JSON back (merge by comment id, newer edit wins).
 - **PR-style diffs by default**: `merge-base(BASE, HEAD)..HEAD`, so drift on the base branch doesn't pollute the review (`--no-merge-base` for the literal two-dot diff).
 - **A PR description panel**: commits authored by the notes author (`PACKDIFF_SYSTEM_USER_EMAIL`) are notes, not code — they are hidden from the page, and the `PR-DESCRIPTION.md` they committed renders as a commentable **Description** panel on top, like the pull request it will become.

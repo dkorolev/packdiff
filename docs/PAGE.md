@@ -33,9 +33,15 @@ Drafts persist per anchor in the browser-preferences record (never the portable 
 
 Comments whose anchors are not in the current rendering (e.g. a page regenerated with different context) appear in an **Unanchored comments** section at the top, still editable and deletable.
 
+## Expanding hunk context
+
+Every gap the diff hides — above a hunk, between hunks, after the last one — carries a quiet expander row. A click reveals up to 20 unchanged lines adjacent to the diff; repeated clicks keep going, and the control retires when the gap is empty. Revealed lines are real context rows: commentable, numbered on both sides, present in unified and side-by-side views alike.
+
+The data comes from the embedded endpoint snapshots (`pd_context_slice`), and the engine verifies the requested region is byte-identical at both endpoints — expansion can never invent or hide a change. Files whose contents were not snapshotted (binary, oversized) do not offer expansion.
+
 ## Filtering by commits
 
-When the range has two or more commits, snapshots are embedded and commit rows become selectable:
+When the range has two or more commits, commit rows become selectable (snapshots are embedded for any non-empty range, but a single commit has nothing to filter):
 
 - **Click** a commit to inspect it alone; **click a second commit** to span the range between them; click the selected commit again to clear. **Press-and-drag** across rows selects a range in one gesture — the view applies when the gesture completes, with no separate Apply step.
 - **Prev / Next** on the range bar step through single commits; **Show full diff** clears the selection.

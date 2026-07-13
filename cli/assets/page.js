@@ -1114,6 +1114,187 @@
     return details;
   }
 
+  // ---- expand hunk context ----
+  // Snapshots carry the full endpoint contents of every changed file, so the
+  // page can reveal the unchanged lines a hunk gap hides. Each gap gets an
+  // expander row; a click reveals up to EXPAND_STEP lines adjacent to the
+  // diff via pd_context_slice (the engine guarantees the region is identical
+  // at both endpoints). Revealed rows are real commentable context rows with
+  // the same anchors as build-time rows. Gap sizes come from the hunk
+  // headers plus the endpoint line counts stamped on the file panel — no
+  // probing. Trailing gaps reveal from the top (adjacent to the hunk above);
+  // every other gap reveals from the bottom (adjacent to the hunk below).
+  const EXPAND_STEP = 20;
+  function hunkBounds(headerText) {
+    const m = /@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(headerText);
+    if (!m) return null;
+    const a = Number(m[1]), b = m[2] === undefined ? 1 : Number(m[2]);
+    const c = Number(m[3]), d = m[4] === undefined ? 1 : Number(m[4]);
+    // A zero-count side names the line BEFORE the hunk (git convention).
+    return {
+      oldFirst: b === 0 ? a + 1 : a, oldLast: b === 0 ? a : a + b - 1,
+      newFirst: d === 0 ? c + 1 : c, newLast: d === 0 ? c : c + d - 1,
+    };
+  }
+  let expanderSeq = 0;
+  function expanderLabel(tr) {
+    const hidden = Number(tr.dataset.oldTo) - Number(tr.dataset.oldFrom) + 1;
+    return hidden <= EXPAND_STEP
+      ? 'Show all ' + hidden + ' hidden line' + (hidden === 1 ? '' : 's')
+      : 'Show ' + EXPAND_STEP + ' of ' + hidden + ' hidden lines';
+  }
+  function expanderRow(gap) {
+    const tr = document.createElement('tr');
+    tr.className = 'expander';
+    tr.dataset.expId = 'x' + (++expanderSeq);
+    tr.dataset.oldFrom = gap.oldFrom;
+    tr.dataset.oldTo = gap.oldTo;
+    tr.dataset.newFrom = gap.newFrom;
+    tr.dataset.newTo = gap.newTo;
+    if (gap.trailing) tr.dataset.trailing = '1';
+    for (const cls of ['gutter', 'ln', 'ln']) {
+      const td = document.createElement('td');
+      td.className = cls;
+      tr.appendChild(td);
+    }
+    const td = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'expander-btn';
+    btn.textContent = expanderLabel(tr);
+    td.appendChild(btn);
+    tr.appendChild(td);
+    return tr;
+  }
+  function setupExpanders() {
+    if (!SNAPSHOTS) return;
+    document.querySelectorAll('#files-full details.file').forEach((file) => {
+      const d = file.dataset;
+      if (!d.oldPath || !d.newPath || d.oldLines === undefined || d.newLines === undefined) return;
+      const table = file.querySelector('table.diff.unified');
+      if (!table) return;
+      let prevOld = 0;
+      let prevNew = 0;
+      let sawHunk = false;
+      for (const row of Array.prototype.slice.call(table.rows)) {
+        if (!row.classList.contains('hunk')) continue;
+        const bounds = hunkBounds(row.cells[row.cells.length - 1].textContent);
+        if (!bounds) continue;
+        if (bounds.oldFirst > prevOld + 1) {
+          row.before(expanderRow({
+            oldFrom: prevOld + 1, oldTo: bounds.oldFirst - 1,
+            newFrom: prevNew + 1, newTo: bounds.newFirst - 1,
+          }));
+        }
+        prevOld = bounds.oldLast;
+        prevNew = bounds.newLast;
+        sawHunk = true;
+      }
+      if (sawHunk && Number(d.oldLines) > prevOld) {
+        (table.tBodies[0] || table).appendChild(expanderRow({
+          oldFrom: prevOld + 1, oldTo: Number(d.oldLines),
+          newFrom: prevNew + 1, newTo: Number(d.newLines),
+          trailing: true,
+        }));
+      }
+    });
+  }
+  function contextRow(anchor, p) {
+    const tr = document.createElement('tr');
+    tr.className = 'ctx commentable';
+    tr.dataset.file = anchor;
+    tr.dataset.side = 'New';
+    tr.dataset.line = String(p.new);
+    const gutter = document.createElement('td');
+    gutter.className = 'gutter';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'gutter-btn';
+    btn.textContent = '+';
+    btn.dataset.file = anchor;
+    btn.dataset.side = 'New';
+    btn.dataset.line = String(p.new);
+    btn.setAttribute('aria-label', 'Add comment on New line ' + p.new);
+    gutter.appendChild(btn);
+    tr.appendChild(gutter);
+    const oldLn = document.createElement('td');
+    oldLn.className = 'ln';
+    oldLn.textContent = String(p.old);
+    tr.appendChild(oldLn);
+    const newLn = document.createElement('td');
+    newLn.className = 'ln';
+    newLn.textContent = String(p.new);
+    tr.appendChild(newLn);
+    const code = document.createElement('td');
+    code.className = 'code';
+    code.textContent = ' ' + p.text;
+    tr.appendChild(code);
+    return tr;
+  }
+  // Split tables carry cloned proxy expanders; resolve back to the unified
+  // original (the single source of gap state) by the stable id.
+  function unifiedExpanderOf(btn) {
+    const row = btn.closest('tr.expander');
+    if (!row) return null;
+    if (row.closest('table.diff.unified')) return row;
+    const file = row.closest('details.file');
+    if (!file) return null;
+    return Array.prototype.find.call(
+      file.querySelectorAll('table.diff.unified tr.expander'),
+      (tr) => tr.dataset.expId === row.dataset.expId) || null;
+  }
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.expander-btn');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const tr = unifiedExpanderOf(btn);
+    if (!tr) return;
+    const file = tr.closest('details.file');
+    const oldFrom = Number(tr.dataset.oldFrom), oldTo = Number(tr.dataset.oldTo);
+    const newFrom = Number(tr.dataset.newFrom), newTo = Number(tr.dataset.newTo);
+    const take = Math.min(EXPAND_STEP, oldTo - oldFrom + 1);
+    if (take <= 0) { tr.remove(); return; }
+    const trailing = tr.dataset.trailing === '1';
+    let lines;
+    try {
+      lines = callWasm('pd_context_slice', SNAPSHOTS, JSON.stringify({
+        old_path: file.dataset.oldPath, new_path: file.dataset.newPath,
+        old_start: trailing ? oldFrom : oldTo - take + 1,
+        new_start: trailing ? newFrom : newTo - take + 1,
+        count: take,
+      }));
+    } catch (e) {
+      showError('Expand failed: ' + e.message);
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    for (const line of lines) {
+      if (line.Ctx) frag.appendChild(contextRow(file.dataset.anchor, line.Ctx));
+    }
+    if (trailing) {
+      tr.before(frag);
+      tr.dataset.oldFrom = oldFrom + take;
+      tr.dataset.newFrom = newFrom + take;
+    } else {
+      tr.after(frag);
+      tr.dataset.oldTo = oldTo - take;
+      tr.dataset.newTo = newTo - take;
+    }
+    if (Number(tr.dataset.oldTo) < Number(tr.dataset.oldFrom)) tr.remove();
+    else tr.querySelector('.expander-btn').textContent = expanderLabel(tr);
+    // Rebuild this file's split (if built) so both views agree, then re-place
+    // comments — an unanchored comment may now have its line on the page.
+    const split = file.querySelector('table.diff.split');
+    if (split) {
+      split.remove();
+      buildSplitsIn(file);
+      syncSplitDisplay(file);
+    }
+    invalidateAnchorIndex();
+    renderAll();
+  });
+
   // ---- exports ----
   function copyText(text, btn) {
     const done = () => {
@@ -1274,6 +1455,21 @@
     for (const row of unified.rows) {
       if (row.classList.contains('comment-row') || row.classList.contains('editor-row')) continue;
       if (row.parentElement && row.parentElement.tagName === 'THEAD') continue;
+      if (row.classList.contains('expander')) {
+        // Proxy: same id and label; clicks resolve back to the unified
+        // original via unifiedExpanderOf, and expansion rebuilds this table.
+        flush();
+        const tr = document.createElement('tr');
+        tr.className = 'expander';
+        for (const k of Object.keys(row.dataset)) tr.dataset[k] = row.dataset[k];
+        const td = document.createElement('td');
+        td.colSpan = 6;
+        const src = row.querySelector('.expander-btn');
+        if (src) td.appendChild(src.cloneNode(true));
+        tr.appendChild(td);
+        split.appendChild(tr);
+        continue;
+      }
       if (row.classList.contains('hunk') || row.classList.contains('meta-line')) {
         flush();
         const tr = document.createElement('tr');
@@ -1755,6 +1951,7 @@
     file.open = prefs.collapsed_files.indexOf(file.dataset.anchor) < 0;
   });
   applyFileWraps();
+  setupExpanders();
   document.querySelectorAll('.md-seg').forEach((seg) => {
     const file = seg.closest('details.file');
     const key = file ? file.dataset.anchor : '__description__';

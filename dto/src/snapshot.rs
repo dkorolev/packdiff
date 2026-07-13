@@ -101,6 +101,53 @@ pub fn range_diff(snap: &RangeSnapshots, from: usize, to: usize, context: usize)
   Ok(files)
 }
 
+/// Unchanged lines shared by a file's two endpoint snapshots — what the
+/// page's expand-context control reveals inside hunk gaps. Returns up to
+/// `count` [`Line::Ctx`] rows starting at `old_start`/`new_start` (1-based,
+/// pre- and post-image), clamped at either file's end. The requested region
+/// must be text-identical at both endpoints — a gap between hunks always is
+/// — so expansion can never invent or hide a change; a mismatch is rejected
+/// loudly. `old_path`/`new_path` may differ (renamed files).
+pub fn context_slice(
+  snap: &RangeSnapshots, old_path: &str, new_path: &str, old_start: u32, new_start: u32, count: u32,
+) -> Result<Vec<Line>, ModelError> {
+  if old_start == 0 || new_start == 0 {
+    return Err(ModelError::InvalidRange("line numbers are 1-based".to_string()));
+  }
+  let (Some(base), Some(head)) = (snap.boundaries.first(), snap.boundaries.last()) else {
+    return Err(ModelError::InvalidRange("snapshot store has no boundaries".to_string()));
+  };
+  let text_at = |boundary: &Boundary, path: &str, side: &str| -> Result<String, ModelError> {
+    let id = boundary
+      .files
+      .get(path)
+      .ok_or_else(|| ModelError::InvalidRange(format!("{path} does not exist at the {side} boundary")))?;
+    let blob = snap
+      .blobs
+      .get(id)
+      .ok_or_else(|| ModelError::InvalidRange(format!("blob {id} missing from the snapshot store")))?;
+    blob.clone().ok_or_else(|| ModelError::InvalidRange(format!("{path} was not snapshotted (binary or oversized)")))
+  };
+  let old_text = text_at(base, old_path, "base")?;
+  let new_text = text_at(head, new_path, "head")?;
+  let old_lines: Vec<&str> = old_text.lines().collect();
+  let new_lines: Vec<&str> = new_text.lines().collect();
+  let mut out = Vec::new();
+  for i in 0..count {
+    let (Some(old_no), Some(new_no)) = (old_start.checked_add(i), new_start.checked_add(i)) else { break };
+    let (Some(old), Some(new)) = (old_lines.get(old_no as usize - 1), new_lines.get(new_no as usize - 1)) else {
+      break; // clamped: one side ran out of file
+    };
+    if old != new {
+      return Err(ModelError::InvalidRange(format!(
+        "old line {old_no} and new line {new_no} differ between the endpoints — not an unchanged region"
+      )));
+    }
+    out.push(Line::Ctx { old: old_no, new: new_no, text: (*old).to_string() });
+  }
+  Ok(out)
+}
+
 /// Diff two texts line-wise into hunks with `context` unchanged lines around
 /// each change — the same [`Hunk`]/[`Line`] shapes `parse_unified_diff`
 /// produces. Identical texts yield no hunks.
@@ -349,6 +396,62 @@ mod tests {
     let mut broken = snap();
     broken.blobs.remove("b-two");
     assert!(matches!(range_diff(&broken, 0, 1, 3), Err(ModelError::InvalidRange(_))));
+  }
+
+  #[test]
+  fn context_slice_returns_clamped_ctx_lines() {
+    // keep.txt is b-one at BOTH endpoints (s0 and s2) of the fixture.
+    let lines = context_slice(&snap(), "keep.txt", "keep.txt", 1, 1, 10).unwrap();
+    assert_eq!(lines.len(), 3, "clamped at end of file");
+    assert_eq!(lines[0], Line::Ctx { old: 1, new: 1, text: "alpha".into() });
+    assert_eq!(lines[2], Line::Ctx { old: 3, new: 3, text: "gamma".into() });
+    let one = context_slice(&snap(), "keep.txt", "keep.txt", 2, 2, 1).unwrap();
+    assert_eq!(one, vec![Line::Ctx { old: 2, new: 2, text: "beta".into() }]);
+    assert!(context_slice(&snap(), "keep.txt", "keep.txt", 9, 9, 5).unwrap().is_empty(), "past EOF: empty, not error");
+  }
+
+  #[test]
+  fn context_slice_follows_renames_and_offset_numbering() {
+    let s = RangeSnapshots {
+      blobs: BTreeMap::from([("b".into(), Some("one\ntwo\nthree\nfour\n".to_string()))]),
+      boundaries: vec![
+        Boundary { sha: "s0".into(), files: BTreeMap::from([("old name.txt".into(), "b".into())]) },
+        Boundary { sha: "s1".into(), files: BTreeMap::from([("new name.txt".into(), "b".into())]) },
+      ],
+    };
+    // Renamed file: the pre-image path resolves at the base boundary, the
+    // post-image path at the head boundary.
+    let lines = context_slice(&s, "old name.txt", "new name.txt", 3, 3, 2).unwrap();
+    assert_eq!(lines[0], Line::Ctx { old: 3, new: 3, text: "three".into() });
+  }
+
+  #[test]
+  fn context_slice_rejects_changed_regions_and_bad_input() {
+    let differing = RangeSnapshots {
+      blobs: BTreeMap::from([
+        ("b-one".into(), Some("alpha\nbeta\n".to_string())),
+        ("b-two".into(), Some("alpha\nBETA\n".to_string())),
+        ("b-bin".into(), None),
+      ]),
+      boundaries: vec![
+        Boundary {
+          sha: "s0".into(),
+          files: BTreeMap::from([("f.txt".into(), "b-one".into()), ("blob.bin".into(), "b-bin".into())]),
+        },
+        Boundary {
+          sha: "s1".into(),
+          files: BTreeMap::from([("f.txt".into(), "b-two".into()), ("blob.bin".into(), "b-bin".into())]),
+        },
+      ],
+    };
+    // Line 1 is shared, line 2 differs: the slice must fail rather than
+    // present a changed line as context.
+    assert!(context_slice(&differing, "f.txt", "f.txt", 1, 1, 1).is_ok());
+    assert!(matches!(context_slice(&differing, "f.txt", "f.txt", 1, 1, 2), Err(ModelError::InvalidRange(_))));
+    // Unsnapshotted, missing, and 0-based requests are loud errors.
+    assert!(matches!(context_slice(&differing, "blob.bin", "blob.bin", 1, 1, 1), Err(ModelError::InvalidRange(_))));
+    assert!(matches!(context_slice(&differing, "nope", "nope", 1, 1, 1), Err(ModelError::InvalidRange(_))));
+    assert!(matches!(context_slice(&differing, "f.txt", "f.txt", 0, 1, 1), Err(ModelError::InvalidRange(_))));
   }
 
   #[test]

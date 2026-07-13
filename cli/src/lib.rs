@@ -115,13 +115,14 @@ pub fn set_verbose(enabled: bool) {
 }
 
 /// File contents at every commit boundary (deduplicated by blob id) — the
-/// data behind the page's commit-range filter. `None` for ranges of fewer
-/// than two commits, where there is nothing to filter.
+/// data behind the page's commit-range filter (two or more commits) and its
+/// expand-context control (any non-empty range: the endpoint boundaries
+/// carry the full file contents). `None` only for an empty range.
 fn collect_snapshots(
   repo: &str, merge_base: &str, commits: &[packdiff_dto::diff::Commit], exclude: Option<&str>,
   progress: &dyn ProgressObserver,
 ) -> Result<Option<RangeSnapshots>, Error> {
-  if commits.len() < 2 {
+  if commits.is_empty() {
     return Ok(None);
   }
   let mut boundary_shas = vec![merge_base.to_string()];
@@ -239,8 +240,8 @@ pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Re
   }
   let exclude = description.as_ref().map(|d| d.path.as_str());
   // collect_snapshots drives the Scan and Snapshots stages itself: each is
-  // entered with its full item count already known. A range of fewer than
-  // two commits skips both stages entirely (nothing to filter).
+  // entered with its full item count already known. An empty range skips
+  // both stages entirely (no content to snapshot).
   let snapshots = collect_snapshots(&opts.repo, &lo, &commits, exclude, progress)?;
   Ok(DiffDocument::new(
     git::repo_name(&opts.repo)?,

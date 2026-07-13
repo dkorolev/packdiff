@@ -88,10 +88,13 @@ fn render_commits(doc: &DiffDocument) -> String {
   if doc.commits.is_empty() {
     return r#"<p class="muted">No commits in range.</p>"#.to_string();
   }
-  // Rows are selectable (range filtering) only when snapshots were collected.
-  let selectable = if doc.snapshots.is_some() { " selectable" } else { "" };
+  // Rows are selectable (range filtering) only when snapshots were collected
+  // AND there is more than one commit — a single commit has nothing to
+  // filter, even though its snapshots power context expansion.
+  let filterable = doc.snapshots.is_some() && doc.commits.len() > 1;
+  let selectable = if filterable { " selectable" } else { "" };
   let mut out = String::new();
-  if doc.snapshots.is_some() {
+  if filterable {
     out.push_str(
       r#"<div class="hint"><strong>Inspect a commit or range.</strong> Click two endpoints or drag across commit rows. The filtered diff is read-only; return to the full diff to comment.</div>"#,
     );
@@ -109,7 +112,7 @@ fn render_commits(doc: &DiffDocument) -> String {
     ));
   }
   out.push_str("</table>");
-  if doc.snapshots.is_some() {
+  if filterable {
     out.push_str(
       r#"<div id="range-bar" hidden>
 <span id="range-label"></span>
@@ -289,7 +292,12 @@ fn gutter_cell(anchor: &str, side: &str, line_no: u32) -> String {
   )
 }
 
-fn render_file(index: usize, f: &FileDiff, _nfiles: usize) -> String {
+/// `endpoint_lines` is the file's line count at the diff's two endpoint
+/// snapshots (pre-image, post-image); `None` when snapshots are absent or
+/// the content was not snapshotted. It parameterizes the page's
+/// expand-context control — the player learns every gap size from these two
+/// numbers plus the hunk headers, with no probing.
+fn render_file(index: usize, f: &FileDiff, endpoint_lines: Option<(usize, usize)>) -> String {
   let badge = status_badge(f.status);
   let notes: String = f.notes.iter().map(|n| format!(r#"<div class="muted note">{}</div>"#, esc(n))).collect();
   let renderable_markdown =
@@ -351,8 +359,12 @@ fn render_file(index: usize, f: &FileDiff, _nfiles: usize) -> String {
     }
   };
 
+  let old_path_attr = f.old_path.as_deref().map(|p| format!(r#" data-old-path="{}""#, esc(p))).unwrap_or_default();
+  let new_path_attr = f.new_path.as_deref().map(|p| format!(r#" data-new-path="{}""#, esc(p))).unwrap_or_default();
+  let lines_attr =
+    endpoint_lines.map(|(old, new)| format!(r#" data-old-lines="{old}" data-new-lines="{new}""#)).unwrap_or_default();
   format!(
-    r##"<details class="file" id="file-{index}" open data-anchor="{anchor}" data-path="{path}" data-status="{letter}" data-adds="{adds}" data-dels="{dels}">
+    r##"<details class="file" id="file-{index}" open data-anchor="{anchor}" data-path="{path}"{old_path_attr}{new_path_attr}{lines_attr} data-status="{letter}" data-adds="{adds}" data-dels="{dels}">
 <summary class="file-summary">
 <span class="file-left">{badge}<span class="path" title="{path}">{path}</span></span>
 <span class="file-right">
@@ -404,11 +416,27 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
       "review_id": review_id,
   });
   let config_json = script_safe_json(&config);
-  let nfiles = doc.files.len();
+  // Endpoint line counts for the expand-context control: the file's length
+  // at the diff's start and end snapshots. `None` when snapshots are absent
+  // or a side's content was not snapshotted (binary / oversized), which
+  // disables expansion for that file.
+  let endpoint_lines = |f: &FileDiff| -> Option<(usize, usize)> {
+    let snap = doc.snapshots.as_ref()?;
+    let count_at = |files: &std::collections::BTreeMap<String, String>, path: Option<&str>| -> Option<usize> {
+      let Some(path) = path else { return Some(0) }; // absent side: zero lines
+      match files.get(path) {
+        None => Some(0), // the path does not exist at this boundary
+        Some(id) => snap.blobs.get(id)?.as_deref().map(|text| text.lines().count()),
+      }
+    };
+    let old = count_at(&snap.boundaries.first()?.files, f.old_path.as_deref())?;
+    let new = count_at(&snap.boundaries.last()?.files, f.new_path.as_deref())?;
+    Some((old, new))
+  };
   let files_html: String = if doc.files.is_empty() {
     r#"<p class="muted">No changes between these refs.</p>"#.to_string()
   } else {
-    doc.files.iter().enumerate().map(|(i, f)| render_file(i, f, nfiles)).collect()
+    doc.files.iter().enumerate().map(|(i, f)| render_file(i, f, endpoint_lines(f))).collect()
   };
   let file_list_html = render_file_list(&doc.files);
   let short = |sha: &str| sha[..sha.len().min(12)].to_string();
