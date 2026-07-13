@@ -14,7 +14,7 @@ The full test pass (`./test.sh`: `cargo fmt --check`, debug tests, release tests
 
 Committing locally stays free and fast; the gate runs when code is about to leave the machine.
 
-2. **CI** — `.github/workflows/ci.yml` runs the same `./test.sh` on every push to `main` and every pull request.
+2. **CI** — `.github/workflows/ci.yml` runs the same `./test.sh` on every push to `main` and every pull request, plus two network-dependent jobs that cannot run in the offline gate: the packaged-tarball verification (the crates.io install path) and `cargo semver-checks` on `packdiff-dto`.
 
 ## Git conventions
 

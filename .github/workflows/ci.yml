@@ -17,3 +17,31 @@ jobs:
           node-version: 20
       - name: Full test pass (fmt, debug tests, release tests, wasm ABI)
         run: ./test.sh
+
+  # The crates.io install path. Package all three crates and verify-build the
+  # tarballs — inside a tarball there is no sibling wasm/ crate, so the cli's
+  # build script takes its registry-shim path, exactly as `cargo install
+  # packdiff` will (PACKDIFF_WASM_SRC points the shim at the local wasm crate
+  # because the PR's version is not on the registry yet; see PUBLISHING.md).
+  # Merging auto-publishes, so works-from-checkout-only regressions must be
+  # caught here, not by a failed release.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the wasm target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Package and verify-build the three crate tarballs
+        run: PACKDIFF_WASM_SRC=$PWD/wasm cargo package --workspace
+
+  # The published API contract: packdiff-dto's public API must stay
+  # semver-compatible with the latest crates.io release. The version ladder
+  # bumps 0.3.z on every PR, so additive API changes always pass; a breaking
+  # dto change fails here until the PR carries 0.4.0.
+  semver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: packdiff-dto
