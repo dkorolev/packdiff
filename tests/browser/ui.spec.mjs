@@ -280,6 +280,7 @@ test('hunk context expands into commentable rows', async ({ page }) => {
   const before = await ctxRows.count();
   await expanders.first().click();
   await expect(ctxRows).toHaveCount(before + 20);
+  await expect(ctxRows.filter({ has: page.locator('.tok-num') })).not.toHaveCount(0);
   await expect(expanders.first()).toHaveText('Show 20 of 26 hidden lines');
   // Revealed lines are real comment targets (bottom of the gap: 27..46).
   const gutter = calc.locator('tr.commentable[data-line="30"] .gutter-btn');
@@ -362,6 +363,7 @@ test('commit range endpoint selection is visible and resettable', async ({ page 
   await rows.nth(0).click();
   await rows.nth(1).click();
   await expect(page.locator('#range-bar')).toBeVisible();
+  await expect(page.locator('#files-range .tok-kw').first()).toBeAttached();
   await page.locator('#range-reset').click();
   await expect(page.locator('#range-bar')).toBeHidden();
 });
@@ -370,6 +372,16 @@ test('mobile keeps one navigation row and disables side-by-side', async ({ page 
   await page.setViewportSize({ width: 390, height: 800 });
   await expect(page.locator('#sidebar-toggle')).toHaveCount(0);
   await expect(page.locator('#view-toggle')).toBeDisabled();
+});
+
+test('side-by-side preserves syntax highlighting markup', async ({ page }) => {
+  await page.setViewportSize({ width: 1700, height: 900 });
+  await expect(page.locator('#view-toggle')).toBeEnabled();
+  await page.locator('#view-toggle').click();
+  const python = page.locator('#files-full details.file[data-anchor="hello.py"]');
+  await python.evaluate((el) => { el.open = true; el.scrollIntoView({ block: 'center' }); });
+  await expect(python.locator('table.diff.split')).toBeVisible();
+  await expect(python.locator('table.diff.split .tok-kw').first()).toBeAttached();
 });
 
 test('expand and collapse all files persist across restart', async ({ page }) => {

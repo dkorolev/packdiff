@@ -11,7 +11,7 @@
 //! presentation and browser state only) — see docs/ARCHITECTURE.md.
 
 use packdiff_dto::diff::{DiffDocument, FileDiff, FileStatus, Line};
-use packdiff_dto::markdown;
+use packdiff_dto::{highlight, markdown};
 
 const CSS: &str = include_str!("../assets/page.css");
 const JS: &str = include_str!("../assets/page.js");
@@ -318,11 +318,12 @@ fn render_file(index: usize, f: &FileDiff, endpoint_lines: Option<(usize, usize)
     let anchor = esc(anchor_path);
     let mut rows = String::new();
     for hunk in &f.hunks {
+      let highlighted = highlight::highlight_hunk(anchor_path, &hunk.lines);
       rows.push_str(&format!(
         r#"<tr class="hunk"><td class="gutter"></td><td class="ln"></td><td class="ln"></td><td>{}</td></tr>"#,
         esc(&hunk.header)
       ));
-      for line in &hunk.lines {
+      for (line_index, line) in hunk.lines.iter().enumerate() {
         let (class, side, line_no, old, new, sign, text) = match line {
           Line::Add { new, text } => ("add", "New", *new, String::new(), new.to_string(), '+', text),
           Line::Del { old, text } => ("del", "Old", *old, old.to_string(), String::new(), '-', text),
@@ -335,9 +336,9 @@ fn render_file(index: usize, f: &FileDiff, endpoint_lines: Option<(usize, usize)
             continue;
           }
         };
+        let html = highlighted.as_ref().map_or_else(|| esc(text), |lines| lines[line_index].clone());
         rows.push_str(&format!(
-          r#"<tr class="{class} commentable" data-file="{anchor}" data-side="{side}" data-line="{line_no}">{gutter}<td class="ln">{old}</td><td class="ln">{new}</td><td class="code">{sign}{}</td></tr>"#,
-          esc(text),
+          r#"<tr class="{class} commentable" data-file="{anchor}" data-side="{side}" data-line="{line_no}">{gutter}<td class="ln">{old}</td><td class="ln">{new}</td><td class="code">{sign}<span class="code-line">{html}</span></td></tr>"#,
           gutter = gutter_cell(&anchor, side, line_no),
         ));
       }

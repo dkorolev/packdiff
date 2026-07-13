@@ -27,6 +27,7 @@ Open `review.html` anywhere — from disk (`file://`), over any static host, or 
 - **Markdown files render**: `.md` files open in the rendered view (added green, removed red); a **Rendered | Source** pill switches while preserving place.
 - **Filter by commits**: click two endpoints or drag across commit rows to select a commit or range (computed in-page by the WASM engine); range views are clearly read-only.
 - **Unified or side-by-side**, plus a per-file **Wrap | Scroll** choice; split enables when the workspace is wide enough. Hunk gaps **expand in place** — 20 unchanged lines per click, commentable like any other line.
+- **Syntax highlighting everywhere code appears**: one safe Rust lexical scanner covers Rust, C/C++, Java, Kotlin, Go, Python, JavaScript/TypeScript, Ruby, shell, SQL, CSS, TOML, YAML, and JSON; unknown languages remain plain text.
 - **Copy** the review out as lossless JSON or Markdown from the Actions menu — and **import** JSON back (merge by comment id, newer edit wins).
 - **PR-style diffs by default**: `merge-base(BASE, HEAD)..HEAD`, so drift on the base branch doesn't pollute the review (`--no-merge-base` for the literal two-dot diff).
 - **A PR description panel**: commits authored by the notes author (`PACKDIFF_SYSTEM_USER_EMAIL`) are notes, not code — they are hidden from the page, and the `PR-DESCRIPTION.md` they committed renders as a commentable **Description** panel on top, like the pull request it will become.
@@ -35,7 +36,7 @@ Open `review.html` anywhere — from disk (`file://`), over any static host, or 
 
 ## How it works
 
-The interesting part of the design: the **data model is one Rust crate, compiled twice**. The CLI links it natively to parse git output; every generated page carries it compiled to WebAssembly (~240 KB, base64-inlined, no wasm-bindgen, empty import object) as the in-browser comment engine. The page's JavaScript is a view layer only — validation, ordering, merge semantics, and export formats are defined once, in Rust, and run identically in tests, in the CLI, and in your browser.
+The interesting part of the design: the **data model is one Rust crate, compiled twice**. The CLI links it natively to parse git output and highlight code; every generated page carries it compiled to WebAssembly (base64-inlined, no wasm-bindgen, empty import object) as the in-browser comment and highlighting engine. The page's JavaScript is a view layer only — validation, ordering, merge semantics, export formats, and lexical highlighting are defined once, in Rust, and run identically in tests, in the CLI, and in your browser.
 
 That boundary is deliberate and permanent: **strict Rust for the engine, vanilla JS for the player**. The player (`cli/assets/page.js`) owns presentation and browser state — DOM, events, wrap/theme/viewed/drafts, localStorage — and stays framework-free and build-step-free; anything that touches review semantics lives in Rust and reaches the page only through the WASM ABI ([the stance, spelled out](docs/ARCHITECTURE.md#web-layer-stance)).
 

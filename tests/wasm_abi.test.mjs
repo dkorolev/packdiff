@@ -64,7 +64,8 @@ test('exports exist', { skip: !ex }, () => {
   for (const name of ['pd_alloc', 'pd_free', 'pd_new_document', 'pd_parse_document',
     'pd_upsert_comment', 'pd_delete_comment', 'pd_merge',
     'pd_export_json', 'pd_export_markdown', 'pd_export_csv', 'pd_storage_key',
-    'pd_markdown_html', 'pd_range_diff', 'pd_context_slice', 'pd_set_verdict']) {
+    'pd_markdown_html', 'pd_highlight_lines', 'pd_highlight_hunk',
+    'pd_range_diff', 'pd_context_slice', 'pd_set_verdict']) {
     assert.equal(typeof ex[name], 'function', name);
   }
 });
@@ -132,6 +133,26 @@ test('markdown renders and hostile input stays escaped', { skip: !ex }, () => {
     '<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>');
   const link = call('pd_markdown_html', '[x](javascript:alert(1))');
   assert.ok(!link.includes('<a '), link);
+});
+
+test('syntax highlighting exports use the page calling convention', { skip: !ex }, () => {
+  const lines = call('pd_highlight_lines', 'src/app.py', JSON.stringify([
+    'def run():', '    return "<script>"',
+  ]));
+  assert.match(lines[0], /tok-kw/);
+  assert.match(lines[0], /tok-fn/);
+  assert.ok(lines[1].includes('&lt;script&gt;'));
+  assert.equal(call('pd_highlight_lines', 'README.md', '["# plain"]'), null);
+
+  const hunk = call('pd_highlight_hunk', 'src/app.rs', JSON.stringify([
+    { Del: { old: 1, text: '/* old opens' } },
+    { Add: { new: 1, text: 'let new_side = true;' } },
+    { Del: { old: 2, text: 'old closes */' } },
+  ]));
+  assert.match(hunk[0], /tok-com/);
+  assert.match(hunk[1], /tok-kw/);
+  assert.match(hunk[2], /tok-com/);
+  assert.equal(call('pd_highlight_hunk', 'page.html', '[]'), null);
 });
 
 test('range diff over snapshots, exactly as the page calls it', { skip: !ex }, () => {

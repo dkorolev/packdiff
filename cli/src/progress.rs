@@ -181,8 +181,7 @@ impl State {
   /// counts, ratcheting the monotonic high-water mark.
   fn advance(&mut self) -> u64 {
     let (start, end) = self.stage.span();
-    let within =
-      if self.stage_total == 0 { 0 } else { (end - start).saturating_mul(self.stage_done) / self.stage_total };
+    let within = (end - start).saturating_mul(self.stage_done).checked_div(self.stage_total).unwrap_or(0);
     self.position = self.position.max(start + within.min(end - start));
     self.position
   }
@@ -240,12 +239,9 @@ impl Progress {
     if machine {
       let (tx, rx) = channel::<()>();
       let ticker_state = Arc::clone(&state);
-      let ticker = std::thread::spawn(move || loop {
-        match rx.recv_timeout(Duration::from_secs(1)) {
-          Err(RecvTimeoutError::Timeout) => {
-            emit(&ticker_state.lock().expect("no thread panics while holding this lock"), started.elapsed());
-          }
-          Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+      let ticker = std::thread::spawn(move || {
+        while let Err(RecvTimeoutError::Timeout) = rx.recv_timeout(Duration::from_secs(1)) {
+          emit(&ticker_state.lock().expect("no thread panics while holding this lock"), started.elapsed());
         }
       });
       Self { started, state, bar: None, ticker_stop: Some(tx), ticker: Some(ticker) }

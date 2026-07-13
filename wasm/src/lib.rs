@@ -35,7 +35,10 @@ pub extern "C" fn pd_alloc(len: u32) -> *mut u8 {
 }
 
 /// Free a buffer previously returned by [`pd_alloc`] or by any API function.
+/// The raw-pointer signature is the stable C ABI; callers must return exactly
+/// a pointer/length pair obtained from this module.
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn pd_free(ptr: *mut u8, len: u32) {
   if ptr.is_null() || len == 0 {
     return;
@@ -258,6 +261,32 @@ pub extern "C" fn pd_context_slice(snap_ptr: *const u8, snap_len: u32, params_pt
 #[no_mangle]
 pub extern "C" fn pd_markdown_html(text_ptr: *const u8, text_len: u32) -> u64 {
   ok(serde_json::Value::String(packdiff_dto::markdown::to_html(&read_arg(text_ptr, text_len))))
+}
+
+/// Highlight a contiguous source-line run. `lines` is a JSON string array;
+/// `Ok` carries an HTML string array, or `null` for an unknown path.
+#[no_mangle]
+pub extern "C" fn pd_highlight_lines(path_ptr: *const u8, path_len: u32, lines_ptr: *const u8, lines_len: u32) -> u64 {
+  let path = read_arg(path_ptr, path_len);
+  let lines: Vec<String> = match serde_json::from_str(&read_arg(lines_ptr, lines_len)) {
+    Ok(lines) => lines,
+    Err(e) => return err(format!("invalid lines: {e}")),
+  };
+  let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+  ok(serde_json::to_value(packdiff_dto::highlight::highlight_lines(&path, &refs)).expect("highlighted lines serialize"))
+}
+
+/// Highlight a typed diff hunk with independent old/new lexer streams.
+/// `lines` is a JSON `Line`-union array; success has the same fallback shape
+/// as [`pd_highlight_lines`].
+#[no_mangle]
+pub extern "C" fn pd_highlight_hunk(path_ptr: *const u8, path_len: u32, lines_ptr: *const u8, lines_len: u32) -> u64 {
+  let path = read_arg(path_ptr, path_len);
+  let lines: Vec<packdiff_dto::diff::Line> = match serde_json::from_str(&read_arg(lines_ptr, lines_len)) {
+    Ok(lines) => lines,
+    Err(e) => return err(format!("invalid hunk lines: {e}")),
+  };
+  ok(serde_json::to_value(packdiff_dto::highlight::highlight_hunk(&path, &lines)).expect("highlighted hunk serializes"))
 }
 
 /// `meta` as in [`pd_new_document`]; returns the legacy SHA-pinned
