@@ -35,7 +35,7 @@ Open `review.html` anywhere — from disk (`file://`), over any static host, or 
 
 ## How it works
 
-The interesting part of the design: the **data model is one Rust crate, compiled twice**. The CLI links it natively to parse git output; every generated page carries it compiled to WebAssembly (~124 KB, base64-inlined, no wasm-bindgen, empty import object) as the in-browser comment engine. The page's JavaScript is a view layer only — validation, ordering, merge semantics, and export formats are defined once, in Rust, and run identically in tests, in the CLI, and in your browser.
+The interesting part of the design: the **data model is one Rust crate, compiled twice**. The CLI links it natively to parse git output; every generated page carries it compiled to WebAssembly (~240 KB, base64-inlined, no wasm-bindgen, empty import object) as the in-browser comment engine. The page's JavaScript is a view layer only — validation, ordering, merge semantics, and export formats are defined once, in Rust, and run identically in tests, in the CLI, and in your browser.
 
 That boundary is deliberate and permanent: **strict Rust for the engine, vanilla JS for the player**. The player (`cli/assets/page.js`) owns presentation and browser state — DOM, events, wrap/theme/viewed/drafts, localStorage — and stays framework-free and build-step-free; anything that touches review semantics lives in Rust and reaches the page only through the WASM ABI ([the stance, spelled out](docs/ARCHITECTURE.md#web-layer-stance)).
 

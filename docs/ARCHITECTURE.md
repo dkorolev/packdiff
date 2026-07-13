@@ -40,7 +40,7 @@ Boundary rules that keep the focus honest:
 2. It passes the artifact path to the CLI via the `PACKDIFF_WASM_PATH` rustc-env; `main.rs` does `include_bytes!(env!("PACKDIFF_WASM_PATH"))`.
 3. `rerun-if-changed` on `wasm/src` and `dto/src` keeps the embedded module fresh.
 
-The workspace release profile is size-tuned (`opt-level="z"`, `lto`, `panic="abort"`, `strip`, one codegen unit) because the wasm module ships inside every page: ~124 KB raw, ~165 KB as base64. Note `panic="abort"` means `cargo test --release` won't work; tests run in the default dev profile.
+The workspace release profile is size-tuned (`opt-level="z"`, `lto`, `panic="abort"`, `strip`, one codegen unit) because the wasm module ships inside every page: ~240 KB raw, ~325 KB as base64 — the dominant fixed cost of a small page. Note `panic="abort"` means `cargo test --release` won't work; tests run in the default dev profile.
 
 ### Toolchain note
 
@@ -53,7 +53,7 @@ Authored frontend assets live in `cli/assets/page.css` and `cli/assets/page.js` 
 1. `#packdiff-config` (`application/json`) — repo, refs+SHAs, merge-base, generation time, and the content-fingerprint `review_id` (with `<` escaped to `\u003c`).
 2. `#packdiff-snapshots` (optional) — commit-boundary blob snapshots for in-page range diffs.
 3. `#packdiff-wasm` (`application/wasm-base64`) — the module bytes.
-4. The view-layer JS: decode base64 → `WebAssembly.instantiate(bytes, {})` → derive the storage key from the config's `review_id` (migrating any legacy `pd_storage_key`-keyed store once) → load/normalize the stored document via `pd_parse_document` → render comment rows; then delegate every user action to the corresponding `pd_*` call and re-render from its result.
+4. The view-layer JS: decode base64 → `WebAssembly.instantiate(bytes, {})` → derive the storage key from the config's `review_id` and schema generation (absorbing older-generation stores, including the legacy `pd_storage_key`-keyed one, by engine merge) → load/normalize the stored document via `pd_parse_document` → render comment rows; then delegate every user action to the corresponding `pd_*` call and re-render from its result.
 
 UI preferences (wrap, collapse state, Markdown views, theme, viewed files, drafts) use a separate `…:prefs` localStorage record, and the undo journal a `…:activity` record; neither enters the portable review document.
 

@@ -53,20 +53,38 @@
     throw new Error(env.Error && env.Error.message ? env.Error.message : 'malformed engine response');
   }
 
-  const KEY = 'packdiff:v1:diff:' + CONFIG.review_id;
+  // The diff store is keyed by review identity AND schema generation: a page
+  // only ever writes the generation its engine speaks. Older generations'
+  // stores stay in place for the pages that wrote them and are absorbed
+  // forward by engine merge (see initDoc) — so a stale page can never
+  // clobber newer state by "starting fresh" over a document it cannot parse.
+  const GEN = CONFIG.schema_version;
+  const KEY = 'packdiff:v' + GEN + ':diff:' + CONFIG.review_id;
   const PREF_KEY = KEY + ':prefs';
   const ACT_KEY = KEY + ':activity';
 
-  // One-time migration from the pre-review_id storage key, so review state
-  // saved by earlier versions survives the identity change.
+  // The older stores this page absorbs from, newest generation first; the
+  // pre-review_id SHA-pinned key (pd_storage_key) is the oldest.
+  function olderStoreKeys() {
+    const keys = [];
+    for (let g = GEN - 1; g >= 1; g--) keys.push('packdiff:v' + g + ':diff:' + CONFIG.review_id);
+    try { keys.push(callWasm('pd_storage_key', META)); } catch (e) { /* engine rejected meta */ }
+    return keys;
+  }
+
+  // One-time adoption of view preferences and the undo journal from the
+  // nearest older store (review DOCUMENTS are merged instead — see initDoc).
   try {
-    if (localStorage.getItem(KEY) === null) {
-      const legacyKey = callWasm('pd_storage_key', META);
-      const legacyDoc = localStorage.getItem(legacyKey);
-      if (legacyDoc !== null) {
-        localStorage.setItem(KEY, legacyDoc);
-        const legacyPrefs = localStorage.getItem(legacyKey + ':prefs');
-        if (legacyPrefs !== null) localStorage.setItem(PREF_KEY, legacyPrefs);
+    if (localStorage.getItem(PREF_KEY) === null || localStorage.getItem(ACT_KEY) === null) {
+      for (const src of olderStoreKeys()) {
+        if (localStorage.getItem(PREF_KEY) === null) {
+          const p = localStorage.getItem(src + ':prefs');
+          if (p !== null) localStorage.setItem(PREF_KEY, p);
+        }
+        if (localStorage.getItem(ACT_KEY) === null) {
+          const a = localStorage.getItem(src + ':activity');
+          if (a !== null) localStorage.setItem(ACT_KEY, a);
+        }
       }
     }
   } catch (e) { /* storage unavailable; initDoc() surfaces the warning */ }
@@ -100,8 +118,9 @@
     theme: 'system',
     drafts: {},
     comment_hint_seen: false,
+    absorbed: {},
   };
-  let prefs = Object.assign({}, DEFAULT_PREFS, { viewed_files: [], drafts: {} });
+  let prefs = Object.assign({}, DEFAULT_PREFS, { viewed_files: [], drafts: {}, absorbed: {} });
   let prefsMemoryOnly = false;
 
   function loadPrefs() {
@@ -121,6 +140,7 @@
         theme: (parsed.theme === 'light' || parsed.theme === 'dark') ? parsed.theme : 'system',
         drafts: (parsed.drafts && typeof parsed.drafts === 'object') ? parsed.drafts : {},
         comment_hint_seen: !!parsed.comment_hint_seen,
+        absorbed: (parsed.absorbed && typeof parsed.absorbed === 'object') ? parsed.absorbed : {},
       };
     } catch (e) {
       prefsMemoryOnly = true;
@@ -171,14 +191,48 @@
     if (el) el.hidden = false;
     memoryOnly = true;
   }
+  // Tiny FNV-1a over a stored string — change detection for absorption only.
+  function fnv(s) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16);
+  }
   function initDoc() {
+    let base = null;
     let raw = null;
     try { raw = localStorage.getItem(KEY); } catch (e) { showStorageWarning(); }
     if (raw !== null) {
-      try { return callWasm('pd_parse_document', raw); }
+      try { base = callWasm('pd_parse_document', raw); }
       catch (e) { console.warn('packdiff: stored document rejected (' + e.message + '); starting fresh'); }
     }
-    return callWasm('pd_new_document', META);
+    if (!base) base = callWasm('pd_new_document', META);
+    if (memoryOnly) return base;
+    // Absorb older-generation stores by engine merge (union by id, newer
+    // wins) — and re-absorb a source only when its content changed since the
+    // last absorption, so a deletion made here is not resurrected by a
+    // static old store. The old stores are never written or removed: the
+    // pages that speak their schema keep working against them.
+    let absorbed = false;
+    for (const src of olderStoreKeys()) {
+      let old = null;
+      try { old = localStorage.getItem(src); } catch (e) { break; }
+      if (old === null || prefs.absorbed[src] === fnv(old)) continue;
+      try {
+        base = callWasm('pd_merge', JSON.stringify(base), old);
+        prefs.absorbed[src] = fnv(old);
+        absorbed = true;
+      } catch (e) {
+        console.warn('packdiff: could not absorb ' + src + ' (' + e.message + ')');
+      }
+    }
+    if (absorbed) {
+      savePrefs();
+      try { localStorage.setItem(KEY, JSON.stringify(base)); } catch (e) { showStorageWarning(); }
+    }
+    return base;
   }
   // ---- activity journal (material review changes; stable-ID operations) ----
   // Stored under its own key: it is review material, not a view preference,
