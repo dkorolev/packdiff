@@ -64,14 +64,14 @@ test('exports exist', { skip: !ex }, () => {
   for (const name of ['pd_alloc', 'pd_free', 'pd_new_document', 'pd_parse_document',
     'pd_upsert_comment', 'pd_delete_comment', 'pd_merge',
     'pd_export_json', 'pd_export_markdown', 'pd_export_csv', 'pd_storage_key',
-    'pd_markdown_html', 'pd_range_diff', 'pd_context_slice']) {
+    'pd_markdown_html', 'pd_range_diff', 'pd_context_slice', 'pd_set_verdict']) {
     assert.equal(typeof ex[name], 'function', name);
   }
 });
 
 test('new document + storage key', { skip: !ex }, () => {
   const doc = call('pd_new_document', META);
-  assert.equal(doc.schema_version, 1);
+  assert.equal(doc.schema_version, 2);
   assert.equal(doc.tool, 'packdiff');
   assert.deepEqual(doc.comments, []);
   const key = call('pd_storage_key', META);
@@ -118,7 +118,7 @@ test('exports: markdown groups by file, csv quotes, json reimports', { skip: !ex
   assert.ok(md.includes('## src/app.rs'));
   assert.ok(md.includes('- **L42 (new)** — multi\n  line "note"'));
   const csv = call('pd_export_csv', JSON.stringify(doc));
-  assert.ok(csv.startsWith('"file","side","line","created_at","updated_at","text"\r\n'));
+  assert.ok(csv.startsWith('"file","side","line","created_at","updated_at","resolved_at","text"\r\n'));
   assert.ok(csv.includes('"multi\nline ""note"""'));
   const json = call('pd_export_json', JSON.stringify(doc));
   const back = call('pd_parse_document', json);
@@ -160,6 +160,37 @@ test('range diff over snapshots, exactly as the page calls it', { skip: !ex }, (
     JSON.stringify({ from: 2, to: 1, context: 3 }));
   assert.ok('Error' in bad);
   assert.match(bad.Error.message, /invalid snapshot range/);
+});
+
+test('verdict: set, merge, clear, validate', { skip: !ex }, () => {
+  let doc = call('pd_new_document', META);
+  doc = call('pd_set_verdict', JSON.stringify(doc),
+    JSON.stringify({ ChangesRequired: { at: '2026-07-13T10:00:00Z' } }));
+  assert.deepEqual(doc.verdict, { ChangesRequired: { at: '2026-07-13T10:00:00Z' } });
+  // Merge: the later decision wins.
+  let other = call('pd_new_document', META);
+  other = call('pd_set_verdict', JSON.stringify(other),
+    JSON.stringify({ Approved: { at: '2026-07-13T12:00:00Z' } }));
+  const merged = call('pd_merge', JSON.stringify(doc), JSON.stringify(other));
+  assert.deepEqual(merged.verdict, { Approved: { at: '2026-07-13T12:00:00Z' } });
+  // `null` clears back to in-progress; the field leaves the JSON entirely.
+  doc = call('pd_set_verdict', JSON.stringify(doc), 'null');
+  assert.equal(doc.verdict, undefined);
+  const bad = callRaw('pd_set_verdict', JSON.stringify(doc),
+    JSON.stringify({ Approved: { at: ' ' } }));
+  assert.ok('Error' in bad);
+  assert.match(bad.Error.message, /invalid verdict/);
+});
+
+test('resolution rides the comment through upsert and into exports', { skip: !ex }, () => {
+  let doc = call('pd_new_document', META);
+  doc = call('pd_upsert_comment', JSON.stringify(doc), comment('c1', 42, 'first'));
+  const resolved = { ...doc.comments[0], resolved_at: '2026-07-13T11:00:00Z', updated_at: '2026-07-13T11:00:00Z' };
+  doc = call('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(resolved));
+  assert.equal(doc.comments[0].resolved_at, '2026-07-13T11:00:00Z');
+  const md = call('pd_export_markdown', JSON.stringify(doc));
+  assert.ok(md.includes('1 comment(s), 0 open'), md);
+  assert.ok(md.includes('(new, resolved)'), md);
 });
 
 test('context slice between the endpoint snapshots', { skip: !ex }, () => {

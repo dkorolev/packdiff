@@ -2,7 +2,7 @@
 
 The `dto/` crate is the single source of truth for every piece of data packdiff handles. It is pure logic: no filesystem, no subprocess, no clock, no randomness. The CLI links it natively; the generated page runs the exact same crate compiled to WebAssembly. Rust API docs: `cargo doc -p packdiff-dto --open`.
 
-Both document families carry `schema_version` (currently `1`) and `tool: "packdiff"`.
+Both document families carry `schema_version` (currently `2`) and `tool: "packdiff"`. v2 added the review verdict and per-comment resolution; a v2 reader accepts v1 documents (the new fields default to absent), and a v1 reader rejects v2 documents loudly, by design. Diff documents are shape-identical across v1 and v2.
 
 ## Encoding and compatibility rules
 
@@ -107,7 +107,7 @@ The mutable review state. Lives in the browser's localStorage; every mutation go
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "tool": "packdiff",
   "repo": "myrepo",
   "base": { "name": "main",       "sha": "<40-hex>" },
@@ -120,9 +120,11 @@ The mutable review state. Lives in the browser's localStorage; every mutation go
       "line": 42,
       "text": "multi\nline note",
       "created_at": "2026-07-03T10:00:00.000Z",
-      "updated_at": "2026-07-03T10:05:00.000Z"
+      "updated_at": "2026-07-03T10:05:00.000Z",
+      "resolved_at": "2026-07-03T11:00:00.000Z"
     }
-  ]
+  ],
+  "verdict": { "ChangesRequired": { "at": "2026-07-03T11:00:00.000Z" } }
 }
 ```
 
@@ -131,9 +133,17 @@ The mutable review state. Lives in the browser's localStorage; every mutation go
 - **Comment identity** is `id` (any non-empty string; the page generates time+random ids). Ids must be unique within a document — `upsert` replaces on id match.
 - **Anchor identity** is `(file, side, line)`: `file` is the post-image path; `side` is `"Old"` (a deleted line, `line` counts in the pre-image) or `"New"` (an added or context line, `line` counts in the post-image). Several comments may share one anchor.
 
+### Resolution
+
+A comment is **resolved** when `resolved_at` (RFC 3339 UTC, caller-supplied) is present, and **open** when it is absent — reopening removes the field; it is never `null`. Resolution rides the comment through ordinary `upsert`, with the accompanying `updated_at` bump carrying it through merges. v1 documents have no `resolved_at` and parse as all-open.
+
+### The verdict
+
+The GitHub-shaped review-level decision: `verdict` is a single-key union — `{ "Approved": { "at": "…" } }` or `{ "ChangesRequired": { "at": "…" } }` — and is absent while the review is in progress. `ReviewDocument::set_verdict` (WASM: `pd_set_verdict`) sets, replaces, or clears it. The timestamp is the payload on purpose: it is the merge tiebreaker.
+
 ### Validation (applied on every entry into the document)
 
-`id`, `file`, `text`, `created_at`, `updated_at` non-empty; `line >= 1`. `ReviewDocument::parse` additionally rejects newer schemas and re-sorts, so untrusted input (imports, hand-edited stores) is normalized at the boundary.
+`id`, `file`, `text`, `created_at`, `updated_at` non-empty; `line >= 1`; `resolved_at` and the verdict's `at`, when present, non-empty. `ReviewDocument::parse` additionally rejects newer schemas and re-sorts, so untrusted input (imports, hand-edited stores) is normalized at the boundary.
 
 ### Canonical order
 
@@ -143,6 +153,7 @@ Comments always sort by `(file, line, side, created_at, id)` with `old` before `
 
 - Union by `id`.
 - On id collision the comment with the **later `updated_at`** wins (RFC 3339 UTC strings compare correctly as strings); an exact tie keeps the existing comment.
+- The verdict follows the same rule on its `at`: the later decision wins, a decision beats no decision, a tie keeps the existing one. Merging never clears a verdict.
 - The receiving document's metadata (`repo`, `base`, `head`) is kept — importing never re-targets a store. This is what carries comments across regenerated diffs: export from the old page, import into the new one.
 
 ## Exports
@@ -150,8 +161,8 @@ Comments always sort by `(file, line, side, created_at, id)` with `old` before `
 | Format | Producer | Shape |
 | --- | --- | --- |
 | JSON | `export::to_json` | The canonical pretty `ReviewDocument` + trailing newline. Lossless; the only format import accepts. |
-| Markdown | `export::to_markdown` | `# Review comments — <repo> <base>..<head>`, a count/SHA line, then `## <file>` sections with `- **L<line> (<side>)** — text` items; multi-line comment text is indented two spaces. |
-| CSV | `export::to_csv` | RFC 4180: every field quoted (`"` doubled), CRLF row endings, header `file,side,line,created_at,updated_at,text`. |
+| Markdown | `export::to_markdown` | `# Review comments — <repo> <base>..<head>`, a `Verdict: …` line when set, a count/SHA line (`, N open` when some comments are resolved), then `## <file>` sections with `- **L<line> (<side>)** — text` items (`(<side>, resolved)` on resolved comments); multi-line comment text is indented two spaces. |
+| CSV | `export::to_csv` | RFC 4180: every field quoted (`"` doubled), CRLF row endings, header `file,side,line,created_at,updated_at,resolved_at,text` (`resolved_at` empty for open comments). One row per comment; the verdict lives in JSON/Markdown only. |
 
 ## Storage key
 

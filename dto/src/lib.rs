@@ -27,8 +27,9 @@
 //! - Both documents carry `schema_version` ([`SCHEMA_VERSION`]). This is the
 //!   one deliberate opt-in to long-term compatibility (review documents live
 //!   in users' localStorage): parsers reject documents from a *newer* schema
-//!   than they understand and accept older ones (there is only v1 today, so
-//!   "accept" means "equal").
+//!   than they understand and accept older ones. v2 (verdict + per-comment
+//!   resolution) reads v1 documents — the new fields default to absent; a v1
+//!   reader rejects v2 documents loudly, by design.
 //! - Determinism: same inputs → byte-identical outputs. Ordering is always
 //!   explicit ([`review::ReviewDocument::sort`]), timestamps and ids are
 //!   caller-supplied, and exports are stable.
@@ -40,7 +41,10 @@ pub mod review;
 pub mod snapshot;
 
 /// Version stamped into (and required of) every document this crate touches.
-pub const SCHEMA_VERSION: u32 = 1;
+/// One generation covers both document families: v2 added the review
+/// verdict and per-comment resolution; diff documents are shape-identical
+/// to v1.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Tool identifier stamped into documents.
 pub const TOOL: &str = "packdiff";
@@ -75,6 +79,9 @@ pub enum ModelError {
   /// A comment failed validation.
   #[error("invalid comment: {0}")]
   InvalidComment(String),
+  /// A review verdict failed validation.
+  #[error("invalid verdict: {0}")]
+  InvalidVerdict(String),
   /// A commit-range request did not match the snapshot store (bad boundary
   /// indices, or a boundary referencing a blob the store does not carry).
   #[error("invalid snapshot range: {0}")]
@@ -92,7 +99,11 @@ pub fn storage_key(repo: &str, base_sha: &str, head_sha: &str) -> String {
   fn short(sha: &str) -> &str {
     &sha[..sha.len().min(12)]
   }
-  format!("packdiff:v{}:{}:{}..{}", SCHEMA_VERSION, repo, short(base_sha), short(head_sha))
+  // The `v1` here names a localStorage NAMESPACE, deliberately decoupled
+  // from SCHEMA_VERSION: documents self-describe their schema, and the
+  // migration must keep finding the keys old pages wrote. Interpolating
+  // SCHEMA_VERSION would silently orphan every existing store on a bump.
+  format!("packdiff:v1:{}:{}..{}", repo, short(base_sha), short(head_sha))
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@
 
 use std::alloc::{alloc, dealloc, Layout};
 
-use packdiff_dto::review::{Comment, ReviewDocument};
+use packdiff_dto::review::{Comment, ReviewDocument, Verdict};
 use packdiff_dto::{export, storage_key, RefInfo};
 use serde_json::json;
 
@@ -124,6 +124,26 @@ pub extern "C" fn pd_delete_comment(doc_ptr: *const u8, doc_len: u32, id_ptr: *c
   };
   doc.delete(&read_arg(id_ptr, id_len));
   ok(doc_value(&doc))
+}
+
+/// Set, replace, or clear the review verdict. `verdict` is either the
+/// single-key union — `{"Approved": {"at": "…"}}` / `{"ChangesRequired":
+/// {"at": "…"}}` — or the literal `null` to return the review to
+/// in-progress. Returns the updated document.
+#[no_mangle]
+pub extern "C" fn pd_set_verdict(doc_ptr: *const u8, doc_len: u32, verdict_ptr: *const u8, verdict_len: u32) -> u64 {
+  let mut doc = match ReviewDocument::parse(&read_arg(doc_ptr, doc_len)) {
+    Ok(d) => d,
+    Err(e) => return err(e),
+  };
+  let verdict: Option<Verdict> = match serde_json::from_str(&read_arg(verdict_ptr, verdict_len)) {
+    Ok(v) => v,
+    Err(e) => return err(format!("invalid verdict: {e}")),
+  };
+  match doc.set_verdict(verdict) {
+    Ok(()) => ok(doc_value(&doc)),
+    Err(e) => err(e),
+  }
 }
 
 /// Merge an imported document into the current one (union by id, newer

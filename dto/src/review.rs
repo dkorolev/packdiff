@@ -25,6 +25,49 @@ pub enum Side {
   New,
 }
 
+/// The reviewer's verdict on the whole change, GitHub-style. Encoded as a
+/// single-key union — `{ "Approved": { "at": "…" } }` — with no
+/// discriminator field. The timestamp is the payload on purpose: it is what
+/// lets two documents merge deterministically (newer verdict wins).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum Verdict {
+  /// The change is approved as it stands.
+  Approved {
+    /// When the verdict was given, RFC 3339 UTC, caller-supplied.
+    at: String,
+  },
+  /// The change needs work before it can land.
+  ChangesRequired {
+    /// When the verdict was given, RFC 3339 UTC, caller-supplied.
+    at: String,
+  },
+}
+
+impl Verdict {
+  /// When the verdict was given — the merge tiebreaker.
+  pub fn at(&self) -> &str {
+    match self {
+      Verdict::Approved { at } | Verdict::ChangesRequired { at } => at,
+    }
+  }
+
+  /// Human label for exports: `approved` / `changes required`.
+  pub fn label(&self) -> &'static str {
+    match self {
+      Verdict::Approved { .. } => "approved",
+      Verdict::ChangesRequired { .. } => "changes required",
+    }
+  }
+
+  fn validate(&self) -> Result<(), ModelError> {
+    if self.at().trim().is_empty() {
+      return Err(ModelError::InvalidVerdict("at must be non-empty".to_string()));
+    }
+    Ok(())
+  }
+}
+
 /// One review comment, anchored to a diff line.
 ///
 /// Anchor identity is `(file, side, line)` where `file` is the post-image
@@ -50,6 +93,11 @@ pub struct Comment {
   /// Last-edit time, RFC 3339 UTC, caller-supplied; drives merge conflict
   /// resolution (newer wins).
   pub updated_at: String,
+  /// When the comment was resolved, RFC 3339 UTC, caller-supplied.
+  /// Present = resolved; absent (and omitted from JSON) = open. Reopening
+  /// removes it. Absent from v1 documents, which parse as all-open.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub resolved_at: Option<String>,
 }
 
 impl Comment {
@@ -68,6 +116,9 @@ impl Comment {
     need(!self.text.trim().is_empty(), "text must be non-empty")?;
     need(!self.created_at.trim().is_empty(), "created_at must be non-empty")?;
     need(!self.updated_at.trim().is_empty(), "updated_at must be non-empty")?;
+    if let Some(at) = &self.resolved_at {
+      need(!at.trim().is_empty(), "resolved_at, when present, must be non-empty")?;
+    }
     Ok(())
   }
 
@@ -96,11 +147,24 @@ pub struct ReviewDocument {
   pub head: RefInfo,
   /// The comments, always in the canonical order ([`ReviewDocument::sort`]).
   pub comments: Vec<Comment>,
+  /// The reviewer's verdict on the whole change; `None` (and omitted from
+  /// JSON) while the review is in progress — and in v1 documents, which
+  /// parse as verdict-less.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub verdict: Option<Verdict>,
 }
 
 impl ReviewDocument {
   pub fn new(repo: String, base: RefInfo, head: RefInfo) -> Self {
-    Self { schema_version: SCHEMA_VERSION, tool: TOOL.to_string(), repo, base, head, comments: Vec::new() }
+    Self {
+      schema_version: SCHEMA_VERSION,
+      tool: TOOL.to_string(),
+      repo,
+      base,
+      head,
+      comments: Vec::new(),
+      verdict: None,
+    }
   }
 
   /// Parse and validate a document. Rejects documents from a newer schema
@@ -114,6 +178,9 @@ impl ReviewDocument {
     }
     for c in &doc.comments {
       c.validate()?;
+    }
+    if let Some(v) = &doc.verdict {
+      v.validate()?;
     }
     doc.sort();
     Ok(doc)
@@ -138,6 +205,15 @@ impl ReviewDocument {
     Ok(())
   }
 
+  /// Set, replace, or (with `None`) clear the review verdict.
+  pub fn set_verdict(&mut self, verdict: Option<Verdict>) -> Result<(), ModelError> {
+    if let Some(v) = &verdict {
+      v.validate()?;
+    }
+    self.verdict = verdict;
+    Ok(())
+  }
+
   /// Remove a comment by id. Returns whether anything was removed.
   pub fn delete(&mut self, id: &str) -> bool {
     let before = self.comments.len();
@@ -149,11 +225,14 @@ impl ReviewDocument {
     removed
   }
 
-  /// Merge another document's comments into this one (the import path).
+  /// Merge another document's comments and verdict into this one (the
+  /// import path).
   ///
   /// Semantics: union by `id`; on an id collision the comment with the
   /// **later `updated_at`** wins (RFC 3339 UTC strings compare correctly
-  /// lexicographically); an exact tie keeps the existing comment. Metadata
+  /// lexicographically); an exact tie keeps the existing comment. The
+  /// verdict follows the same rule on its `at`: the later decision wins, a
+  /// decision beats no decision, a tie keeps the existing one. Metadata
   /// (repo/refs) of `self` is kept — importing does not re-target a store.
   pub fn merge(&mut self, incoming: &ReviewDocument) {
     for inc in &incoming.comments {
@@ -164,6 +243,11 @@ impl ReviewDocument {
           }
         }
         None => self.comments.push(inc.clone()),
+      }
+    }
+    if let Some(inc) = &incoming.verdict {
+      if self.verdict.as_ref().map_or(true, |cur| inc.at() > cur.at()) {
+        self.verdict = Some(inc.clone());
       }
     }
     self.sort();
@@ -196,7 +280,12 @@ mod tests {
       text: format!("note {id}"),
       created_at: "2026-07-03T10:00:00Z".into(),
       updated_at: updated.into(),
+      resolved_at: None,
     }
+  }
+
+  fn verdict_approved(at: &str) -> Verdict {
+    Verdict::Approved { at: at.into() }
   }
 
   #[test]
@@ -312,6 +401,7 @@ mod tests {
       text: "x".into(),
       created_at: "t".into(),
       updated_at: "t".into(),
+      resolved_at: None,
     });
     let json = serde_json::to_string(&d).unwrap();
     assert!(matches!(ReviewDocument::parse(&json), Err(ModelError::InvalidComment(_))));
@@ -324,6 +414,80 @@ mod tests {
     d.comments.push(comment("a", "a.rs", 1, "2026-07-03T10:00:00Z"));
     let parsed = ReviewDocument::parse(&serde_json::to_string(&d).unwrap()).unwrap();
     assert_eq!(parsed.comments[0].id, "a");
+  }
+
+  #[test]
+  fn verdict_serializes_as_single_key_union_with_timestamp() {
+    assert_eq!(
+      serde_json::to_value(verdict_approved("2026-07-13T10:00:00Z")).unwrap(),
+      serde_json::json!({ "Approved": { "at": "2026-07-13T10:00:00Z" } })
+    );
+    assert_eq!(
+      serde_json::to_value(Verdict::ChangesRequired { at: "t".into() }).unwrap(),
+      serde_json::json!({ "ChangesRequired": { "at": "t" } })
+    );
+  }
+
+  #[test]
+  fn set_verdict_validates_and_clears() {
+    let mut d = doc();
+    assert!(matches!(d.set_verdict(Some(verdict_approved("  "))), Err(ModelError::InvalidVerdict(_))));
+    assert_eq!(d.verdict, None, "a rejected verdict leaves the document untouched");
+    d.set_verdict(Some(verdict_approved("2026-07-13T10:00:00Z"))).unwrap();
+    assert_eq!(d.verdict.as_ref().unwrap().label(), "approved");
+    d.set_verdict(None).unwrap();
+    assert_eq!(d.verdict, None, "clearing returns the review to in-progress");
+  }
+
+  #[test]
+  fn merge_verdict_later_decision_wins() {
+    // A decision beats no decision.
+    let mut ours = doc();
+    let mut theirs = doc();
+    theirs.set_verdict(Some(verdict_approved("2026-07-13T10:00:00Z"))).unwrap();
+    ours.merge(&theirs);
+    assert_eq!(ours.verdict, theirs.verdict);
+    // A later decision beats an earlier one.
+    let mut newer = doc();
+    newer.set_verdict(Some(Verdict::ChangesRequired { at: "2026-07-13T12:00:00Z".into() })).unwrap();
+    ours.merge(&newer);
+    assert_eq!(ours.verdict.as_ref().unwrap().label(), "changes required");
+    // An earlier decision loses; no decision never clears one.
+    ours.merge(&theirs);
+    assert_eq!(ours.verdict, newer.verdict);
+    ours.merge(&doc());
+    assert_eq!(ours.verdict, newer.verdict);
+  }
+
+  #[test]
+  fn resolved_comments_validate_and_roundtrip() {
+    let mut d = doc();
+    let mut resolved = comment("c1", "a.rs", 5, "2026-07-13T11:00:00Z");
+    resolved.resolved_at = Some("2026-07-13T11:00:00Z".into());
+    d.upsert(resolved).unwrap();
+    let back = ReviewDocument::parse(&d.to_json_pretty()).unwrap();
+    assert_eq!(back.comments[0].resolved_at.as_deref(), Some("2026-07-13T11:00:00Z"));
+    // Present-but-blank is rejected; absent stays absent in the JSON.
+    let mut blank = comment("c2", "a.rs", 6, "t");
+    blank.resolved_at = Some("  ".into());
+    assert!(matches!(d.upsert(blank), Err(ModelError::InvalidComment(_))));
+    let open = comment("c3", "a.rs", 7, "t");
+    d.upsert(open).unwrap();
+    assert!(!serde_json::to_string(&d.comments[1]).unwrap().contains("resolved_at"));
+  }
+
+  #[test]
+  fn v1_documents_parse_with_the_new_fields_defaulted() {
+    // A document exactly as a v1 page wrote it: no verdict, no resolved_at.
+    let v1 = r#"{
+      "schema_version": 1, "tool": "packdiff", "repo": "repo",
+      "base": { "name": "main", "sha": "a" }, "head": { "name": "feat", "sha": "b" },
+      "comments": [ { "id": "c1", "file": "a.rs", "side": "New", "line": 5,
+        "text": "note", "created_at": "t", "updated_at": "t" } ]
+    }"#;
+    let doc = ReviewDocument::parse(v1).unwrap();
+    assert_eq!(doc.verdict, None);
+    assert_eq!(doc.comments[0].resolved_at, None);
   }
 
   #[test]

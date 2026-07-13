@@ -183,6 +183,51 @@ test('comment gutter creates, edits, and deletes a comment', async ({ page }) =>
   await expect(page.locator('.comment-card').first()).toBeVisible();
 });
 
+test('verdict and resolve are material, undoable review state', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  // Verdict: Require changes → persists across reload; Approve replaces it;
+  // undo restores the previous decision.
+  await page.locator('#verdict-changes').click();
+  await expect(page.locator('#verdict-changes')).toHaveAttribute('aria-pressed', 'true');
+  await page.reload();
+  await page.waitForFunction(() => {
+    const el = document.getElementById('comment-count');
+    return el && /comment/.test(el.textContent || '');
+  });
+  await expect(page.locator('#verdict-changes')).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#verdict-approve').click();
+  await expect(page.locator('#verdict-approve')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#verdict-changes')).toHaveAttribute('aria-pressed', 'false');
+  await page.locator('#undo-change').click();
+  await expect(page.locator('#verdict-changes')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#verdict-approve')).toHaveAttribute('aria-pressed', 'false');
+
+  // Resolve: a resolved comment dims in place and the chrome count splits.
+  await page.evaluate(() => {
+    for (const d of document.querySelectorAll('#files-full details.file')) {
+      d.open = true;
+      const wrap = d.querySelector('.diff-wrap');
+      const preview = d.querySelector('.md-preview');
+      if (wrap && preview) { preview.hidden = true; wrap.hidden = false; }
+    }
+  });
+  const gutter = page.locator('#files-full .diff-wrap:not([hidden]) tr.commentable .gutter-btn').nth(1);
+  await gutter.evaluate((el) => {
+    el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    el.click();
+  });
+  const editor = page.locator('.pd-editor textarea');
+  await editor.fill('needs a second look');
+  await page.locator('.pd-editor button.primary').click();
+  const card = page.locator('.comment-card').first();
+  await expect(card).toBeVisible();
+  await card.locator('.comment-actions button', { hasText: 'Resolve' }).click();
+  await expect(page.locator('.comment-card').first()).toHaveClass(/resolved/);
+  await expect(page.locator('#comment-count')).toContainText('1 comment · 0 open');
+  await page.locator('.comment-card .comment-actions button', { hasText: 'Reopen' }).click();
+  await expect(page.locator('#comment-count')).toHaveText('1 comment');
+});
+
 test('hunk context expands into commentable rows', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const calc = page.locator('#files-full details.file[data-anchor="calc.py"]');

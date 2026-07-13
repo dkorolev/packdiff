@@ -7,7 +7,7 @@ The HTML file packdiff writes is the whole product: one file, no server, no netw
 The review reads top to bottom as one document — summary first, then Description (when present), Commits, Files changed, Diff, Activity:
 
 - **Review summary** — a plain-language line (commit and file counts, `+/−` totals, how to comment) with a **Details** disclosure underneath (repository, refs with SHAs, merge-base, generation time, tool version, schema). Both scroll away.
-- **Pinned navigation** — the ONE row that stays: **← Back**, section links, the current file's context while you scroll the diff (path breadcrumbs, `+/−`, comment count), the **Side-by-side** toggle, the comment count (click steps to the next comment), the review-change count, **Undo**, and the **Actions** menu.
+- **Pinned navigation** — the ONE row that stays: **← Back**, section links, the current file's context while you scroll the diff (path breadcrumbs, `+/−`, comment count), the **Approve | Require changes** verdict, the **Side-by-side** toggle, the comment count (click steps to the next comment), the review-change count, **Undo**, and the **Actions** menu.
 - **Description** — the lifted PR description (the [notes-commit convention](CLI.md#the-notes-commit-convention)), a rendered card with no provenance chrome. A **Rendered | Source** pill switches to a line-numbered source view; both are commentable.
 - **Commits** — the commit table; rows become selectable for range filtering when snapshots are embedded.
 - **Files changed** — the file index (status, path, per-file `+/−`). This section IS the navigator; there is no separate sidebar.
@@ -26,8 +26,12 @@ Breadcrumb segments in the pinned row are actionable: selecting a directory land
 
 1. Click the **`+` gutter** — or anywhere on a commentable line, or on a rendered Markdown block; the gutter is a visual affordance, the entire valid line is the target. An editor opens with **Write | Preview** tabs and an anchor header.
 2. Type; **Ctrl/Cmd+Enter** saves, **Escape** cancels. Empty text is discarded. Comment text is **markdown**; Preview uses the same `pd_markdown_html` engine as saved cards.
-3. Saved comments appear under the line with **Edit** / **Delete**. Delete is a two-step inline confirm, and remains undoable.
+3. Saved comments appear under the line with **Edit** / **Resolve** / **Delete**. Delete is a two-step inline confirm; everything remains undoable.
 4. Lines with comments show a count in the gutter; file headers (and the pinned row's context) show per-file counts that jump to the file's first comment.
+
+**Resolving.** A resolved comment dims in place (hover restores legibility) and its meta line records when; **Reopen** brings it back. The chrome count splits — `3 comments · 1 open` — whenever some comments are resolved. Resolution travels with exports and imports like any other comment state.
+
+**The verdict.** GitHub-shaped: **Approve** or **Require changes** applies to the whole change; clicking the active state clears it back to in-progress. The verdict is material review state — journaled, undoable, exported (JSON and the Markdown header), and merged on import (the later decision wins).
 
 Drafts persist per anchor in the browser-preferences record (never the portable review document): they survive view-mode switches and reloads, and reopen visibly at their anchors on load.
 
@@ -51,7 +55,7 @@ Sub-range diffs are computed inside the page (`pd_range_diff` over the embedded 
 
 ## Review changes, Activity, and Undo
 
-Material review changes — comments added, updated, or deleted, and files marked viewed — are journaled as stable-ID operations in their own `…:activity` record. The pinned row shows the change count (a link to the Activity section) and **Undo**, which inverts the most recent operation through the same engine calls that made it. View preferences (wrap, theme, collapse, drafts) are comfort state, not journal material.
+Material review changes — comments added, updated, resolved, reopened, or deleted, the verdict, and files marked viewed — are journaled as stable-ID operations in their own `…:activity` record. The pinned row shows the change count (a link to the Activity section) and **Undo**, which inverts the most recent operation through the same engine calls that made it. View preferences (wrap, theme, collapse, drafts) are comfort state, not journal material.
 
 ## Review progress (viewed files)
 

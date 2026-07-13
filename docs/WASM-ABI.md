@@ -49,7 +49,8 @@ API (all return the packed-u64 envelope; `meta` and `doc`/`comment`/`incoming` a
 | `pd_parse_document` | `doc` | validated + normalized `ReviewDocument` object (the load path; rejects newer `schema_version`, invalid comments, garbage) |
 | `pd_upsert_comment` | `doc`, `comment` | updated document (insert, or replace by `id`) |
 | `pd_delete_comment` | `doc`, `id` *(plain string, not JSON)* | updated document; deleting a missing id is not an error |
-| `pd_merge` | `doc`, `incoming` | merged document (union by id, later `updated_at` wins) — the Import JSON path |
+| `pd_merge` | `doc`, `incoming` | merged document (union by id, later `updated_at` wins; later verdict wins) — the Import JSON path |
+| `pd_set_verdict` | `doc`, `verdict` (`{"Approved": {"at": "…"}}` / `{"ChangesRequired": {"at": "…"}}`, or the literal `null` to clear) | updated document — the review-level verdict |
 | `pd_export_json` | `doc` | canonical pretty JSON **string** |
 | `pd_export_markdown` | `doc` | Markdown **string** |
 | `pd_export_csv` | `doc` | RFC 4180 CSV **string** |

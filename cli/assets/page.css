@@ -855,6 +855,9 @@ tr.comment-row td, tr.editor-row td {
   padding: 8px 12px;
   margin: 4px 0;
 }
+/* Resolved comments dim in place; hovering or focusing restores legibility. */
+.comment-card.resolved { opacity: 0.6; border-left-color: var(--ok); }
+.comment-card.resolved:hover, .comment-card.resolved:focus-within { opacity: 1; }
 .comment-body { margin: 4px 0; }
 .comment-body > :first-child { margin-top: 0; }
 .comment-body > :last-child { margin-bottom: 0; }

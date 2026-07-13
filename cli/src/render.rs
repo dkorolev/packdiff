@@ -502,6 +502,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 </div>
 <div id="current-file-context" class="current-file-context" aria-live="polite"></div>
 <div class="chrome-actions">
+<span class="seg verdict-seg" role="group" aria-label="Review verdict"><button type="button" id="verdict-approve" aria-pressed="false" title="Approve the whole change; click again to clear">Approve</button><button type="button" id="verdict-changes" aria-pressed="false" title="The change needs work; click again to clear">Require changes</button></span>
 <button type="button" id="view-toggle" disabled aria-pressed="false" title="Not enough horizontal space to render side-by-side">Side-by-side</button>
 <button type="button" id="comment-count" class="review-summary" hidden>0 comments</button>
 <a id="change-count" class="chrome-link" href="#activity" hidden>0 changes</a>

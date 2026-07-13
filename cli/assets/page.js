@@ -207,7 +207,10 @@
       for (const c of next.comments) {
         if (!before[c.id]) pushActivity({ kind: 'comment_added', label: 'Comment added', comment_id: c.id });
         else if (JSON.stringify(before[c.id]) !== JSON.stringify(c)) {
-          pushActivity({ kind: 'comment_updated', label: 'Comment updated', comment: before[c.id] });
+          const was = before[c.id];
+          const label = !was.resolved_at && c.resolved_at ? 'Comment resolved'
+            : was.resolved_at && !c.resolved_at ? 'Comment reopened' : 'Comment updated';
+          pushActivity({ kind: 'comment_updated', label: label, comment: was });
         }
       }
       for (const c of doc.comments) {
@@ -312,7 +315,8 @@
   // ---- counts / per-file meta ----
   function updateCount() {
     const n = doc.comments.length;
-    const label = n + ' comment' + (n === 1 ? '' : 's');
+    const open = doc.comments.filter((c) => !c.resolved_at).length;
+    const label = n + ' comment' + (n === 1 ? '' : 's') + (open === n ? '' : ' · ' + open + ' open');
     const btn = document.getElementById('comment-count');
     if (btn) { btn.textContent = label; btn.hidden = n === 0; }
     // gutter badges
@@ -421,6 +425,7 @@
       let next;
       try {
         if (entry.kind === 'comment_added') next = callWasm('pd_delete_comment', JSON.stringify(doc), entry.comment_id);
+        else if (entry.kind === 'verdict') next = callWasm('pd_set_verdict', JSON.stringify(doc), JSON.stringify(entry.previous || null));
         else next = callWasm('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(entry.comment));
       } catch (e) {
         activity.push(entry);
@@ -433,17 +438,51 @@
       }
     }
     saveActivity();
+    renderVerdict();
     renderAll(); renderActivity();
     showToast('Last review change undone');
   });
 
+  // ---- review verdict ----
+  // GitHub-shaped: the whole change is Approved or ChangesRequired; clicking
+  // the active state clears it back to in-progress. Material review state:
+  // engine-mutated (pd_set_verdict), journaled, undoable.
+  function renderVerdict() {
+    const approve = document.getElementById('verdict-approve');
+    const changes = document.getElementById('verdict-changes');
+    if (!approve || !changes) return;
+    const key = doc && doc.verdict ? Object.keys(doc.verdict)[0] : null;
+    approve.setAttribute('aria-pressed', key === 'Approved' ? 'true' : 'false');
+    changes.setAttribute('aria-pressed', key === 'ChangesRequired' ? 'true' : 'false');
+  }
+  function setVerdict(variant) {
+    const current = doc.verdict ? Object.keys(doc.verdict)[0] : null;
+    const target = current === variant ? null : {};
+    if (target) target[variant] = { at: new Date().toISOString() };
+    let next;
+    try { next = callWasm('pd_set_verdict', JSON.stringify(doc), JSON.stringify(target)); }
+    catch (e) { showError('Verdict failed: ' + e.message); return; }
+    pushActivity({
+      kind: 'verdict',
+      label: target === null ? 'Verdict cleared'
+        : variant === 'Approved' ? 'Change approved' : 'Changes required',
+      previous: doc.verdict || null,
+    });
+    persist(next);
+    renderVerdict();
+  }
+  document.getElementById('verdict-approve').addEventListener('click', () => setVerdict('Approved'));
+  document.getElementById('verdict-changes').addEventListener('click', () => setVerdict('ChangesRequired'));
+
   function commentCard(c) {
     const wrap = document.createElement('div');
     wrap.className = 'comment-card';
+    if (c.resolved_at) wrap.classList.add('resolved');
     wrap.dataset.commentId = c.id;
     const meta = document.createElement('div');
     meta.className = 'comment-meta';
-    meta.textContent = c.file + ' · ' + c.side.toLowerCase() + ' line ' + c.line + ' · ' + c.updated_at;
+    meta.textContent = c.file + ' · ' + c.side.toLowerCase() + ' line ' + c.line + ' · ' + c.updated_at +
+      (c.resolved_at ? ' · resolved ' + c.resolved_at : '');
     const body = document.createElement('div');
     body.className = 'comment-body';
     try { body.innerHTML = callWasm('pd_markdown_html', c.text); }
@@ -454,6 +493,22 @@
     edit.type = 'button';
     edit.textContent = 'Edit';
     edit.addEventListener('click', () => openEditorFor(c));
+    // Resolve/reopen is an ordinary engine upsert: resolved_at rides the
+    // comment, and the updated_at bump lets merges pick the newer state.
+    const resolve = document.createElement('button');
+    resolve.type = 'button';
+    resolve.textContent = c.resolved_at ? 'Reopen' : 'Resolve';
+    resolve.addEventListener('click', () => {
+      const now = new Date().toISOString();
+      const updated = Object.assign({}, c, { updated_at: now, resolved_at: c.resolved_at ? undefined : now });
+      let next;
+      try { next = callWasm('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(updated)); }
+      catch (e) { showError((c.resolved_at ? 'Reopen' : 'Resolve') + ' failed: ' + e.message); return; }
+      persist(next);
+      removeCommentDom(c.id);
+      const fresh = doc.comments.find((x) => x.id === c.id);
+      if (fresh) placeComment(fresh);
+    });
     const del = document.createElement('button');
     del.type = 'button';
     del.textContent = 'Delete';
@@ -471,6 +526,7 @@
       removeCommentDom(c.id);
     });
     actions.appendChild(edit);
+    actions.appendChild(resolve);
     actions.appendChild(del);
     wrap.appendChild(meta);
     wrap.appendChild(body);
@@ -1947,6 +2003,7 @@
   }
 
   doc = initDoc();
+  renderVerdict();
   document.querySelectorAll('details.file').forEach((file) => {
     file.open = prefs.collapsed_files.indexOf(file.dataset.anchor) < 0;
   });

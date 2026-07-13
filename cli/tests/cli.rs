@@ -150,7 +150,8 @@ fn end_to_end() {
   assert!(html.contains(r#"id="files-range""#));
   assert_eq!(html.matches(r#"class="copy-sha""#).count(), 2);
   assert_eq!(html.matches(r#"class="commit selectable""#).count(), 2);
-  for id in ["copy-json", "copy-md", "import-json", "expand-all", "collapse-all"] {
+  for id in ["copy-json", "copy-md", "import-json", "expand-all", "collapse-all", "verdict-approve", "verdict-changes"]
+  {
     assert!(html.contains(&format!("id=\"{id}\"")), "missing #{id}");
   }
   // The human-readable document and its one-row navigation are canonical.
@@ -176,7 +177,7 @@ fn end_to_end() {
   // The dumped DiffDocument parses back through the dto schema, with
   // single-key line unions.
   let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
-  assert_eq!(doc["schema_version"], 1);
+  assert_eq!(doc["schema_version"], 2);
   assert_eq!(doc["files"].as_array().unwrap().len(), 5);
   assert_eq!(doc["base"]["name"], "main");
   // Snapshots: one boundary per commit plus the merge base, and the binary
