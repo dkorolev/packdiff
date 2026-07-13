@@ -6,7 +6,7 @@ Ship the **same compiled data model to both sides of the tool**. The `packdiff-d
 
 ```
              ┌────────────────────── dto/  (packdiff-dto) ──────────────────────┐
-             │  schema types · unified-diff parser · comment ops · exports · key   │
+             │ schema types · diff parser · highlighting · comment ops · exports  │
              └──────────────┬───────────────────────────────┬───────────────────── ┘
                     native  │                        wasm32 │  (no_std not needed;
                             ▼                               ▼   no imports either)
@@ -40,7 +40,7 @@ Boundary rules that keep the focus honest:
 2. It passes the artifact path to the CLI via the `PACKDIFF_WASM_PATH` rustc-env; `main.rs` does `include_bytes!(env!("PACKDIFF_WASM_PATH"))`.
 3. `rerun-if-changed` on `wasm/src` and `dto/src` keeps the embedded module fresh.
 
-The workspace release profile is size-tuned (`opt-level="z"`, `lto`, `panic="abort"`, `strip`, one codegen unit) because the wasm module ships inside every page: ~240 KB raw, ~325 KB as base64 — the dominant fixed cost of a small page. Note `panic="abort"` means `cargo test --release` won't work; tests run in the default dev profile.
+The workspace release profile is size-tuned (`opt-level="z"`, `lto`, `panic="abort"`, `strip`, one codegen unit) because the wasm module ships inside every page. The lexical highlighter increased the module from 242,395 to 270,250 bytes raw (+27,855 bytes, 11.5%) and from 323,196 to 360,336 bytes base64. Note `panic="abort"` means `cargo test --release` won't work; tests run in the default dev profile.
 
 ### Toolchain note
 
@@ -65,10 +65,10 @@ Each layer is tested through its real interface, and the heavier layers test the
 
 | Layer | Where | What it proves |
 | --- | --- | --- |
-| model | `dto/src/*` unit tests (43) | Parser line-numbering and statuses, validation, ordering, merge conflict rules, schema rejection, export shapes, canonical round-trips |
-| CLI | `cli/tests/cli.rs` (real binary + scratch git repo) | merge-base vs two-dot semantics, `--json`/`--dump-json` contracts, exit codes 2/3/4, HTML self-containment, XSS escaping, wasm inlining (skips with a hint if git is absent) |
-| WASM | `tests/wasm_abi.test.mjs` (Node ≥18) | The real `.wasm` under the exact page calling convention: alloc/free protocol, envelopes, every export, error paths (skips with a hint until built) |
-| Browser UI | `tests/browser/ui.spec.mjs` (Playwright) | Generated HTML over `file://`: chrome/sidebar, gutter comments, Preview/Diff, viewed state, range filter, no network after load (installs Chromium on first run) |
+| model | `dto/src/*` unit tests (60) | Parser line-numbering and statuses, safe lexical highlighting and parallel hunk state, validation, ordering, merge conflict rules, schema rejection, export shapes, canonical round-trips |
+| CLI | `cli/tests/cli.rs` (real binary + scratch git repo) | merge-base vs two-dot semantics, `--json`/`--dump-json` contracts, exit codes 2/3/4, highlighted HTML, self-containment, XSS escaping, wasm inlining (skips with a hint if git is absent) |
+| WASM | `tests/wasm_abi.test.mjs` (Node ≥18) | The real `.wasm` under the exact page calling convention: alloc/free protocol, envelopes, highlighting and every other export, error paths (skips with a hint until built) |
+| Browser UI | `tests/browser/ui.spec.mjs` (Playwright) | Generated HTML over `file://`: chrome, gutter comments, highlighting in split/range/expanded-context views, Preview/Diff, viewed state, range filter, no network after load (installs Chromium on first run) |
 
 `./test.sh` runs all of it, plus `cargo fmt --check` and a release-mode test pass. The same script is the pre-push hook (`.githooks/pre-push`; enable with `git config core.hooksPath .githooks`) and the CI gate (`.github/workflows/ci.yml`). A clean checkout stays green: tests missing a prerequisite (git, Node) skip with a hint rather than fail.
 
@@ -76,7 +76,7 @@ CI runs two further jobs that need the network and so stay out of `test.sh`: **p
 
 ## Web layer stance
 
-**Strict Rust for the engine, vanilla JS for the player.** The boundary is drawn by responsibility, not by size. The **engine** is everything with review semantics — validation, ordering, merge, exports, markdown, storage keys, range diffs — strongly-typed Rust in `packdiff-dto`, compiled to WASM for the page. The litmus test: if a behavior changes what an export contains or what a stored review document means, it is engine work and lands in Rust. The **player** — `cli/assets/page.js` — is deliberately vanilla JavaScript owning presentation and browser state only: DOM assembly, event wiring, view preferences (wrap, theme, viewed files, drafts), localStorage I/O. The player may be substantial — a review workspace has a lot of view — but it stays framework-free, build-step-free, and semantics-free: it round-trips JSON through `pd_*` calls and never edits the review document itself. This split is a settled decision, not a migration way-station — the player is not waiting to be rewritten in `wasm-bindgen`.
+**Strict Rust for the engine, vanilla JS for the player.** The boundary is drawn by responsibility, not by size. The **engine** is everything with review or source semantics — validation, ordering, merge, exports, markdown, lexical highlighting, storage keys, range diffs — strongly-typed Rust in `packdiff-dto`, compiled to WASM for the page. The litmus test: if a behavior changes what an export contains, what a stored review document means, or how source text is classified, it is engine work and lands in Rust. The **player** — `cli/assets/page.js` — is deliberately vanilla JavaScript owning presentation and browser state only: DOM assembly, event wiring, view preferences (wrap, theme, viewed files, drafts), localStorage I/O. The player may be substantial — a review workspace has a lot of view — but it stays framework-free, build-step-free, and semantics-free: it round-trips JSON through `pd_*` calls and never edits the review document itself. This split is a settled decision, not a migration way-station — the player is not waiting to be rewritten in `wasm-bindgen`.
 
 ## External processes and liveness
 

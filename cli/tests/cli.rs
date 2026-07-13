@@ -118,6 +118,11 @@ fn end_to_end() {
   // (config JSON, snapshots JSON, wasm base64, app JS).
   assert!(!html.contains("<script>alert(1)</script>"));
   assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+  assert!(html.contains(r#"class="tok-kw">def</span>"#), "Python keywords are highlighted");
+  assert!(
+    html.contains(r#"class="tok-str">&#39;&lt;script&gt;alert(1)&lt;/script&gt;&#39;</span>"#),
+    "hostile source remains escaped inside a syntax span"
+  );
   assert_eq!(html.matches("<script").count(), 4);
   // The wasm module is inlined (base64 of `\0asm`).
   assert!(html.contains("id=\"packdiff-wasm\">AGFzbQ"));

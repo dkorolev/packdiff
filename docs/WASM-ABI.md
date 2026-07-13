@@ -2,7 +2,7 @@
 
 `wasm/` compiles the data model to `wasm32-unknown-unknown` behind a small, hand-rolled C ABI — **no wasm-bindgen, no JS glue, empty import object** — so the module instantiates from `file://` with `WebAssembly.instantiate(bytes, {})`. The CLI inlines it base64-encoded into every generated page (`<script type="application/wasm-base64" id="packdiff-wasm">`), where it is the comment engine: the page's JavaScript is a view layer and never edits review state itself.
 
-The built artifact lives at `target-wasm/wasm32-unknown-unknown/release/packdiff_wasm.wasm` (~240 KB). `tests/wasm_abi.test.mjs` drives it exactly as described here.
+The built artifact lives at `target-wasm/wasm32-unknown-unknown/release/packdiff_wasm.wasm` (270,250 bytes at v0.4.2). `tests/wasm_abi.test.mjs` drives it exactly as described here.
 
 ## Calling convention
 
@@ -57,6 +57,8 @@ API (all return the packed-u64 envelope; `meta` and `doc`/`comment`/`incoming` a
 | `pd_range_diff` | `snapshots` (a `RangeSnapshots` JSON), `params` (`{"from": i, "to": j, "context": n}`, boundary indices with `from < to`) | `FileDiff` **array** — the sub-range diff, same shape as the build-time parser's output |
 | `pd_context_slice` | `snapshots` (a `RangeSnapshots` JSON), `params` (`{"old_path", "new_path", "old_start", "new_start", "count"}`, 1-based starts; paths differ for renames) | `Line` **array** of `Ctx` entries — the unchanged lines shared by the endpoint snapshots, clamped at either file's end; a region not identical at both endpoints is an `Error` |
 | `pd_markdown_html` | `text` *(raw markdown, not JSON)* | safe-HTML **string** (the markdown subset in docs/PAGE.md; all input escaped, `http`/`https`/`mailto` links only; never fails) |
+| `pd_highlight_lines` | `path` *(plain string)*, `lines` *(JSON string array)* | safe-HTML string array with lexer state carried across the run, or `null` when the path has no profile |
+| `pd_highlight_hunk` | `path` *(plain string)*, `lines` *(JSON `Line`-union array)* | safe-HTML string array in input order with independent old/new lexer state, or `null` when the path has no profile |
 | `pd_storage_key` | `meta` | legacy SHA-pinned localStorage key **string** — pages now key state by the content-fingerprint `review_id` and call this once to migrate old state ([PAGE.md](PAGE.md#where-review-state-lives)) |
 
 `meta` shape (used by `pd_new_document` and `pd_storage_key`):

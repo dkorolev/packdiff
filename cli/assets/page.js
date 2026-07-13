@@ -1190,6 +1190,9 @@
       return td;
     };
     for (const hunk of f.hunks) {
+      let highlighted = null;
+      try { highlighted = callWasm('pd_highlight_hunk', f.new_path || f.old_path, JSON.stringify(hunk.lines)); }
+      catch (e) { /* safe plain-text fallback below */ }
       const hr = document.createElement('tr');
       hr.className = 'hunk';
       hr.appendChild(cell('gutter', ''));
@@ -1197,7 +1200,8 @@
       hr.appendChild(cell('ln', ''));
       hr.appendChild(cell('', hunk.header));
       table.appendChild(hr);
-      for (const line of hunk.lines) {
+      for (let lineIndex = 0; lineIndex < hunk.lines.length; lineIndex++) {
+        const line = hunk.lines[lineIndex];
         const kind = Object.keys(line)[0];
         const p = line[kind];
         const tr = document.createElement('tr');
@@ -1213,7 +1217,13 @@
           tr.appendChild(cell('gutter', ''));
           tr.appendChild(cell('ln', p.old !== undefined ? String(p.old) : ''));
           tr.appendChild(cell('ln', p.new !== undefined ? String(p.new) : ''));
-          tr.appendChild(cell('code', sign + p.text));
+          const code = cell('code', sign);
+          const source = document.createElement('span');
+          source.className = 'code-line';
+          if (highlighted) source.innerHTML = highlighted[lineIndex];
+          else source.textContent = p.text;
+          code.appendChild(source);
+          tr.appendChild(code);
         }
         table.appendChild(tr);
       }
@@ -1309,7 +1319,7 @@
       }
     });
   }
-  function contextRow(anchor, p) {
+  function contextRow(anchor, p, highlighted) {
     const tr = document.createElement('tr');
     tr.className = 'ctx commentable';
     tr.dataset.file = anchor;
@@ -1337,7 +1347,12 @@
     tr.appendChild(newLn);
     const code = document.createElement('td');
     code.className = 'code';
-    code.textContent = ' ' + p.text;
+    code.appendChild(document.createTextNode(' '));
+    const source = document.createElement('span');
+    source.className = 'code-line';
+    if (highlighted !== null) source.innerHTML = highlighted;
+    else source.textContent = p.text;
+    code.appendChild(source);
     tr.appendChild(code);
     return tr;
   }
@@ -1378,9 +1393,14 @@
       showError('Expand failed: ' + e.message);
       return;
     }
+    let highlighted = null;
+    try {
+      highlighted = callWasm('pd_highlight_lines', file.dataset.anchor,
+        JSON.stringify(lines.map((line) => line.Ctx.text)));
+    } catch (e) { /* safe plain-text fallback in contextRow */ }
     const frag = document.createDocumentFragment();
-    for (const line of lines) {
-      if (line.Ctx) frag.appendChild(contextRow(file.dataset.anchor, line.Ctx));
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].Ctx) frag.appendChild(contextRow(file.dataset.anchor, lines[i].Ctx, highlighted ? highlighted[i] : null));
     }
     if (trailing) {
       tr.before(frag);
@@ -1486,7 +1506,7 @@
     }
     return td;
   }
-  function splitCodeCell(text, kind, anchor) {
+  function splitCodeCell(text, html, kind, anchor) {
     const td = document.createElement('td');
     td.className = 'code' + (kind ? ' ' + kind : '');
     if (anchor) {
@@ -1495,7 +1515,11 @@
       td.dataset.side = anchor.side;
       td.dataset.line = anchor.line;
     }
-    td.textContent = text;
+    const source = document.createElement('span');
+    source.className = 'code-line';
+    if (html !== null) source.innerHTML = html;
+    else source.textContent = text;
+    td.appendChild(source);
     return td;
   }
   function splitEmpty(tr) {
@@ -1512,10 +1536,12 @@
     const isOld = side === 'Old';
     const lnIdx = isOld ? 1 : 2;
     const no = row.cells[lnIdx].textContent;
-    const text = row.cells[3].textContent.slice(1);
+    const source = row.cells[3].querySelector('.code-line');
+    const text = source ? source.textContent : row.cells[3].textContent.slice(1);
+    const html = source ? source.innerHTML : null;
     const anchor = (row.classList.contains('commentable') && row.dataset.side === side)
       ? { file: row.dataset.file, side: side, line: row.dataset.line } : null;
-    return { no: no, text: text, anchor: anchor };
+    return { no: no, text: text, html: html, anchor: anchor };
   }
 
   function buildSplit(unified) {
@@ -1550,13 +1576,13 @@
           const d = unifiedCell(dels[i], 'Old');
           tr.appendChild(splitGutter(d.anchor, 'del'));
           tr.appendChild(splitLnCell(d.no, 'del'));
-          tr.appendChild(splitCodeCell(d.text, 'del', d.anchor));
+          tr.appendChild(splitCodeCell(d.text, d.html, 'del', d.anchor));
         } else { splitEmpty(tr); }
         if (adds[i]) {
           const a = unifiedCell(adds[i], 'New');
           tr.appendChild(splitGutter(a.anchor, 'add'));
           tr.appendChild(splitLnCell(a.no, 'add'));
-          tr.appendChild(splitCodeCell(a.text, 'add', a.anchor));
+          tr.appendChild(splitCodeCell(a.text, a.html, 'add', a.anchor));
         } else { splitEmpty(tr); }
         split.appendChild(tr);
       }
@@ -1596,10 +1622,10 @@
         const tr = document.createElement('tr');
         tr.appendChild(splitGutter(null, ''));
         tr.appendChild(splitLnCell(oldNo, ''));
-        tr.appendChild(splitCodeCell(c.text, '', null));
+        tr.appendChild(splitCodeCell(c.text, c.html, '', null));
         tr.appendChild(splitGutter(c.anchor, ''));
         tr.appendChild(splitLnCell(c.no, ''));
-        tr.appendChild(splitCodeCell(c.text, '', c.anchor));
+        tr.appendChild(splitCodeCell(c.text, c.html, '', c.anchor));
         split.appendChild(tr);
       } else if (row.classList.contains('del')) {
         dels.push(row);

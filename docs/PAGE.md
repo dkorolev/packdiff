@@ -22,6 +22,12 @@ Breadcrumb segments in the pinned row are actionable: selecting a directory land
 
 **Wrap | Scroll** is a per-file choice on each file header: long lines soft-wrap by default (`overflow-wrap: anywhere`, not `break-all`); Scroll switches that file to horizontal scrolling. The choice persists.
 
+## Syntax highlighting
+
+Every code-line surface uses the same safe lexical highlighter: the initial unified diff is highlighted at build time, and the embedded WASM engine supplies identical markup for commit-range views and expanded context; side-by-side copies that engine-authored markup from the unified rows. Profiles cover Rust, C/C++, Java, Kotlin, Go, Python, JavaScript/TypeScript, Ruby, shell, SQL, CSS, TOML, YAML, and JSON. HTML/XML and Markdown source remain deliberately plain, as does any unknown extension.
+
+Highlighting classifies comments, strings, numbers, keywords, word literals, and likely function calls by color without changing font weight, line metrics, wrapping, or diff meaning. It is lexical presentation only: it never compares old and new text and is not intraline diff emphasis. Source is HTML-escaped inside the engine before fixed `tok-*` spans are added, so highlighting cannot turn source text into page markup.
+
 ## Commenting
 
 1. Click the **`+` gutter** — or anywhere on a commentable line, or on a rendered Markdown block; the gutter is a visual affordance, the entire valid line is the target. An editor opens with **Write | Preview** tabs and an anchor header.
