@@ -64,7 +64,7 @@ test('exports exist', { skip: !ex }, () => {
   for (const name of ['pd_alloc', 'pd_free', 'pd_new_document', 'pd_parse_document',
     'pd_upsert_comment', 'pd_delete_comment', 'pd_merge',
     'pd_export_json', 'pd_export_markdown', 'pd_export_csv', 'pd_storage_key',
-    'pd_markdown_html', 'pd_range_diff']) {
+    'pd_markdown_html', 'pd_range_diff', 'pd_context_slice']) {
     assert.equal(typeof ex[name], 'function', name);
   }
 });
@@ -160,6 +160,28 @@ test('range diff over snapshots, exactly as the page calls it', { skip: !ex }, (
     JSON.stringify({ from: 2, to: 1, context: 3 }));
   assert.ok('Error' in bad);
   assert.match(bad.Error.message, /invalid snapshot range/);
+});
+
+test('context slice between the endpoint snapshots', { skip: !ex }, () => {
+  const SNAPSHOTS = JSON.stringify({
+    blobs: { one: 'alpha\nbeta\ngamma\n', two: 'alpha\nBETA\ngamma\n' },
+    boundaries: [
+      { sha: 's0', files: { 'a.txt': 'one' } },
+      { sha: 's1', files: { 'a.txt': 'two' } },
+      { sha: 's2', files: { 'a.txt': 'one' } },
+    ],
+  });
+  // a.txt is identical at the endpoints (the middle boundary does not matter).
+  const lines = call('pd_context_slice', SNAPSHOTS, JSON.stringify(
+    { old_path: 'a.txt', new_path: 'a.txt', old_start: 1, new_start: 1, count: 10 }));
+  assert.equal(lines.length, 3, 'clamped at end of file');
+  assert.deepEqual(lines[0], { Ctx: { old: 1, new: 1, text: 'alpha' } });
+  assert.deepEqual(lines[2], { Ctx: { old: 3, new: 3, text: 'gamma' } });
+  // Unknown paths come back as envelopes, not traps.
+  const bad = callRaw('pd_context_slice', SNAPSHOTS, JSON.stringify(
+    { old_path: 'nope', new_path: 'nope', old_start: 1, new_start: 1, count: 1 }));
+  assert.ok('Error' in bad);
+  assert.match(bad.Error.message, /does not exist/);
 });
 
 test('error envelopes: invalid comment, garbage, newer schema, unknown field', { skip: !ex }, () => {

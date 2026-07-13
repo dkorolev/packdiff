@@ -124,6 +124,12 @@ fn end_to_end() {
   // Comment anchors use the CamelCase `Side` variant names.
   assert!(html.contains("data-file=\"hello.py\" data-side=\"New\""));
   assert!(html.contains("data-side=\"Old\""));
+  // Expand-context prerequisites: endpoint paths and line counts stamped on
+  // the file panel (hello.py grew from 2 to 5 lines in the fixture).
+  assert!(
+    html.contains(r#"data-old-path="hello.py" data-new-path="hello.py" data-old-lines="2" data-new-lines="5""#),
+    "endpoint paths and line counts are stamped for the expander"
+  );
   assert!(html.contains("torename.txt → renamed.txt"));
   assert!(html.contains("Binary file — contents not shown."));
   assert!(html.contains("feature change one"));
@@ -347,6 +353,10 @@ fn head_refs_resolve_with_carets_and_case_insensitively() {
     let html = String::from_utf8_lossy(&output.stdout);
     assert!(html.contains("newfile.md"), "{base} spans the last feature commit");
     assert!(!html.contains("feature change one"), "{base} excludes the first feature commit");
+    // Single-commit ranges carry snapshots (for expand-context) but their
+    // one commit is not range-selectable — there is nothing to filter.
+    assert!(html.contains(r#"id="packdiff-snapshots""#), "{base}: snapshots power expand-context");
+    assert!(!html.contains("commit selectable"), "{base}: a single commit has nothing to range-filter");
   }
 
   // Deep caret chains work too: `head^^` == the merge base here, so the diff

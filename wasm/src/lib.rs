@@ -194,6 +194,44 @@ pub extern "C" fn pd_range_diff(snap_ptr: *const u8, snap_len: u32, params_ptr: 
   }
 }
 
+/// Unchanged lines shared by a file's two endpoint snapshots — the page's
+/// expand-context data. `snapshots` is a `RangeSnapshots` JSON; `params` is
+/// `{"old_path": "...", "new_path": "...", "old_start": N, "new_start": N,
+/// "count": N}` (1-based starts; paths differ for renames). `Ok` carries a
+/// `Line` array of `Ctx` entries, clamped at either file's end; a region
+/// that is not identical at both endpoints is rejected.
+#[no_mangle]
+pub extern "C" fn pd_context_slice(snap_ptr: *const u8, snap_len: u32, params_ptr: *const u8, params_len: u32) -> u64 {
+  #[derive(serde::Deserialize)]
+  #[serde(deny_unknown_fields)]
+  struct Params {
+    old_path: String,
+    new_path: String,
+    old_start: u32,
+    new_start: u32,
+    count: u32,
+  }
+  let snap: packdiff_dto::snapshot::RangeSnapshots = match serde_json::from_str(&read_arg(snap_ptr, snap_len)) {
+    Ok(s) => s,
+    Err(e) => return err(format!("invalid snapshots: {e}")),
+  };
+  let params: Params = match serde_json::from_str(&read_arg(params_ptr, params_len)) {
+    Ok(p) => p,
+    Err(e) => return err(format!("invalid params: {e}")),
+  };
+  match packdiff_dto::snapshot::context_slice(
+    &snap,
+    &params.old_path,
+    &params.new_path,
+    params.old_start,
+    params.new_start,
+    params.count,
+  ) {
+    Ok(lines) => ok(serde_json::to_value(lines).expect("Line serializes: no non-string keys")),
+    Err(e) => err(e),
+  }
+}
+
 /// Render markdown to safe HTML (the subset in `packdiff_dto::markdown`).
 /// The input is the raw markdown text — a plain UTF-8 string, not JSON —
 /// and `Ok` carries the HTML string. Never fails on any input.

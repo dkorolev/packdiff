@@ -37,9 +37,10 @@ pub struct DiffDocument {
   /// Per-file changes, in the order git emitted them.
   pub files: Vec<FileDiff>,
   /// File snapshots at every commit boundary, enabling in-page filtering of
-  /// the diff to any contiguous commit sub-range. `None` (and omitted from
-  /// JSON) when not collected — on older builds, or ranges of fewer than
-  /// two commits, where there is nothing to filter.
+  /// the diff to any contiguous commit sub-range (two or more commits) and
+  /// in-page expansion of hunk context (any non-empty range). `None` (and
+  /// omitted from JSON) when not collected — on older builds, or empty
+  /// ranges, where there is no content to snapshot.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub snapshots: Option<crate::snapshot::RangeSnapshots>,
   /// The PR description lifted out of the diff (the notes-commit

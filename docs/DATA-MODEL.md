@@ -68,7 +68,7 @@ Field notes:
 
 ### `snapshots` — commit-boundary file contents
 
-Present when the range has two or more commits; powers the page's in-place commit-range filter. Contents are deduplicated by git blob id; a blob stored as `null` was not snapshotted (binary, not UTF-8, or over 2 MB) and renders as "contents not shown" in sub-range views.
+Present for any non-empty range; powers the page's in-place commit-range filter (two or more commits) and its expand-context control. Contents are deduplicated by git blob id; a blob stored as `null` was not snapshotted (binary, not UTF-8, or over 2 MB) and renders as "contents not shown" in sub-range views.
 
 ```json
 {
@@ -83,6 +83,7 @@ Present when the range has two or more commits; powers the page's in-place commi
 
 - `boundaries[0]` is the diff's start (the merge base); `boundaries[k]` for `k > 0` is the state after the k-th commit. Only paths touched by some commit in the range appear in `files`; a missing path does not exist at that boundary.
 - `snapshot::range_diff(snapshots, from, to, context)` (WASM: `pd_range_diff`) produces the `FileDiff` array between two boundaries via a pure Myers line diff. Renames are not re-detected: within a sub-range a rename is a delete plus an add.
+- `snapshot::context_slice(snapshots, old_path, new_path, old_start, new_start, count)` (WASM: `pd_context_slice`) returns the unchanged `Ctx` lines shared by the two endpoint boundaries — the page's expand-context data, clamped at either file's end. A region that is not identical at both endpoints is rejected, so expansion can never present a changed line as context.
 
 ### `description` — the lifted PR description
 

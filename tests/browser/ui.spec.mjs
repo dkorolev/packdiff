@@ -51,11 +51,17 @@ function makeFixture() {
   write(repo, 'todelete.txt', 'obsolete\n');
   write(repo, 'notes.md', '# Title\n\nBody paragraph.\n');
   write(repo, 'blob.bin', Buffer.from([0, 1, 2, 66, 73, 78]));
+  // 60 lines with a mid-file change coming: hunk gaps on both sides, for the
+  // expand-context tests.
+  const calcLine = (i) => `line ${i + 1}`;
+  write(repo, 'calc.py', Array.from({ length: 60 }, (_, i) => calcLine(i)).join('\n') + '\n');
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-qm', 'initial']);
 
   git(repo, ['checkout', '-qb', 'feature']);
   write(repo, 'hello.py', "def hello():\n    return 'hello'\n\ndef evil():\n    return 42\n");
+  write(repo, 'calc.py',
+    Array.from({ length: 60 }, (_, i) => (i === 49 ? 'line 50 CHANGED' : calcLine(i))).join('\n') + '\n');
   git(repo, ['rm', '-q', 'todelete.txt']);
   write(repo, 'notes.md', '# Title\n\nBody paragraph updated.\n\n## More\n');
   write(repo, 'newfile.md', '# New\n\nBrand new file.\n');
@@ -175,6 +181,32 @@ test('comment gutter creates, edits, and deletes a comment', async ({ page }) =>
   await expect(page.locator('.comment-card')).toHaveCount(0);
   await page.locator('#undo-change').click();
   await expect(page.locator('.comment-card').first()).toBeVisible();
+});
+
+test('hunk context expands into commentable rows', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const calc = page.locator('#files-full details.file[data-anchor="calc.py"]');
+  await calc.evaluate((el) => { el.open = true; el.scrollIntoView({ block: 'center' }); });
+  // calc.py changes line 50 of 60: a 46-line gap above the hunk, 7 below.
+  const expanders = calc.locator('table.diff.unified tr.expander .expander-btn');
+  await expect(expanders).toHaveCount(2);
+  await expect(expanders.first()).toHaveText('Show 20 of 46 hidden lines');
+  await expect(expanders.last()).toHaveText('Show all 7 hidden lines');
+  const ctxRows = calc.locator('table.diff.unified tr.ctx');
+  const before = await ctxRows.count();
+  await expanders.first().click();
+  await expect(ctxRows).toHaveCount(before + 20);
+  await expect(expanders.first()).toHaveText('Show 20 of 26 hidden lines');
+  // Revealed lines are real comment targets (bottom of the gap: 27..46).
+  const gutter = calc.locator('tr.commentable[data-line="30"] .gutter-btn');
+  await gutter.evaluate((el) => { el.scrollIntoView({ block: 'center' }); el.click(); });
+  const editor = page.locator('.pd-editor textarea');
+  await editor.fill('note on an expanded line');
+  await page.locator('.pd-editor button.primary').click();
+  await expect(calc.locator('.comment-card')).toHaveCount(1);
+  // The small trailing gap empties in one click and the control retires.
+  await expanders.last().click();
+  await expect(calc.locator('table.diff.unified tr.expander')).toHaveCount(1);
 });
 
 test('Preview/Diff pill switches without losing the panel', async ({ page }) => {

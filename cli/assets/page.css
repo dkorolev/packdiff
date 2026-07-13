@@ -763,6 +763,22 @@ tr.hunk td, tr.meta-line td {
 /* Hunk headers stay in document flow (not sticky): sticky hunks stack under
    sticky file headers and intercept clicks on gutter buttons below. */
 
+/* expand-context row: a quiet full-width control in the hunk-header idiom */
+tr.expander td { background: var(--panel); padding: 0; }
+.expander-btn {
+  display: block;
+  width: 100%;
+  padding: 3px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.expander-btn:hover, .expander-btn:focus-visible { background: var(--accent-soft); }
+
 /* comment gutter button */
 .gutter-btn {
   opacity: 0;
