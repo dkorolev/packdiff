@@ -183,6 +183,45 @@ test('comment gutter creates, edits, and deletes a comment', async ({ page }) =>
   await expect(page.locator('.comment-card').first()).toBeVisible();
 });
 
+test('older-generation stores are absorbed by merge, never clobbered', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ready = () => page.waitForFunction(() => {
+    const el = document.getElementById('comment-count');
+    return el && /comment/.test(el.textContent || '');
+  });
+  const plantV1 = (comments) => page.evaluate((comments) => {
+    const cfg = JSON.parse(document.getElementById('packdiff-config').textContent);
+    localStorage.setItem('packdiff:v1:diff:' + cfg.review_id, JSON.stringify({
+      schema_version: 1, tool: 'packdiff', repo: cfg.repo, base: cfg.base, head: cfg.head,
+      comments: comments,
+    }));
+  }, comments);
+  // A v1 page wrote a comment under its own generation's key: this page
+  // absorbs it on load.
+  await plantV1([{ id: 'old1', file: 'hello.py', side: 'New', line: 2, text: 'from an old page',
+    created_at: '2026-07-10T00:00:00Z', updated_at: '2026-07-10T00:00:00Z' }]);
+  await page.reload();
+  await ready();
+  await expect(page.locator('#comment-count')).toContainText('1 comment');
+  // Delete it here: the UNCHANGED old store must not resurrect it on reload.
+  const del = page.locator('.comment-card .comment-actions button', { hasText: 'Delete' });
+  await del.click();
+  await expect(del).toContainText('Confirm delete');
+  await del.click();
+  await expect(page.locator('.comment-card')).toHaveCount(0);
+  await page.reload();
+  await ready();
+  await expect(page.locator('.comment-card')).toHaveCount(0);
+  // A CHANGED old store (someone kept writing in the old page) is absorbed
+  // again — old-page work flows forward instead of being lost.
+  await plantV1([{ id: 'old2', file: 'hello.py', side: 'New', line: 2, text: 'newer old-page note',
+    created_at: '2026-07-11T00:00:00Z', updated_at: '2026-07-11T00:00:00Z' }]);
+  await page.reload();
+  await ready();
+  await expect(page.locator('#comment-count')).toContainText('1 comment');
+  await expect(page.locator('.comment-card')).toContainText('newer old-page note');
+});
+
 test('verdict and resolve are material, undoable review state', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   // Verdict: Require changes → persists across reload; Approve replaces it;

@@ -2,7 +2,7 @@
 
 `wasm/` compiles the data model to `wasm32-unknown-unknown` behind a small, hand-rolled C ABI — **no wasm-bindgen, no JS glue, empty import object** — so the module instantiates from `file://` with `WebAssembly.instantiate(bytes, {})`. The CLI inlines it base64-encoded into every generated page (`<script type="application/wasm-base64" id="packdiff-wasm">`), where it is the comment engine: the page's JavaScript is a view layer and never edits review state itself.
 
-The built artifact lives at `target-wasm/wasm32-unknown-unknown/release/packdiff_wasm.wasm` (~124 KB). `tests/wasm_abi.test.mjs` drives it exactly as described here.
+The built artifact lives at `target-wasm/wasm32-unknown-unknown/release/packdiff_wasm.wasm` (~240 KB). `tests/wasm_abi.test.mjs` drives it exactly as described here.
 
 ## Calling convention
 
