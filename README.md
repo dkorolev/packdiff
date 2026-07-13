@@ -62,7 +62,7 @@ Straight from this repository:
 ```console
 $ cargo install --git https://github.com/dkorolev/packdiff packdiff
 $ packdiff --version
-packdiff 0.3.10
+packdiff 0.3.11
 ```
 
 From crates.io:
