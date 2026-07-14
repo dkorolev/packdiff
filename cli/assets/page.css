@@ -119,7 +119,8 @@
 
 * { box-sizing: border-box; }
 
-html, body { height: 100%; }
+html { height: 100%; }
+body { min-height: 100%; }
 
 body {
   margin: 0;
@@ -737,6 +738,15 @@ details.file:not([open]) > summary.file-summary {
   border-color: transparent;
 }
 .seg button:hover:not(.active):not([aria-pressed="true"]) { color: var(--fg); }
+.seg button:focus-visible { outline: none; }
+.seg:has(button:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Review submission choices are actions, not a presentation-mode switch. */
+.verdict-actions { display: inline-flex; align-items: center; gap: 6px; }
+.verdict-actions button { border-radius: 6px; }
 
 /* diff tables */
 .diff-scroll {

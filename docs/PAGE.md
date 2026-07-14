@@ -7,7 +7,7 @@ The HTML file packdiff writes is the whole product: one file, no server, no netw
 The review reads top to bottom as one document — summary first, then Description (when present), Commits, Files changed, Diff, Activity:
 
 - **Review summary** — a plain-language line (commit and file counts, `+/−` totals, how to comment) with a **Details** disclosure underneath (repository, refs with SHAs, merge-base, generation time, tool version, schema). Both scroll away.
-- **Pinned navigation** — the ONE row that stays: **← Back**, section links, the current file's context while you scroll the diff (path breadcrumbs, `+/−`, comment count), the **Approve | Require changes** verdict, the **Side-by-side** toggle, the comment count (click steps to the next comment), the review-change count, **Undo**, and the **Actions** menu.
+- **Pinned navigation** — the ONE row that stays: **← Back**, scroll-tracking section links, the current file's context while you scroll the diff (path breadcrumbs, `+/−`, comment count), the **Approve | Require changes** verdict, the **Side-by-side** toggle, the comment count (click steps to the next comment), the review-change count, **Undo**, and the **Actions** menu. **Description**, **Commits**, **Files changed**, and **Diff** are clickable tabs whose blue active state follows the visible section.
 - **Description** — the lifted PR description (the [notes-commit convention](CLI.md#the-notes-commit-convention)), a rendered card with no provenance chrome. A **Rendered | Source** pill switches to a line-numbered source view; both are commentable.
 - **Commits** — the commit table; rows become selectable for range filtering when snapshots are embedded.
 - **Files changed** — the file index (status, path, per-file `+/−`). This section IS the navigator; there is no separate sidebar.
@@ -37,7 +37,7 @@ Highlighting classifies comments, strings, numbers, keywords, word literals, and
 
 **Resolving.** A resolved comment dims in place (hover restores legibility) and its meta line records when; **Reopen** brings it back. The chrome count splits — `3 comments · 1 open` — whenever some comments are resolved. Resolution travels with exports and imports like any other comment state.
 
-**The verdict.** GitHub-shaped: **Approve** or **Require changes** applies to the whole change; clicking the active state clears it back to in-progress. The verdict is material review state — journaled, undoable, exported (JSON and the Markdown header), and merged on import (the later decision wins).
+**The review outcome.** **Comment** leaves no verdict action. **Approve** or **Require changes** applies a verdict to the whole change and contributes exactly one final Activity action; switching between those verdicts replaces that action rather than adding another. Returning to Comment removes it. Verdicts are exported (JSON and the Markdown header), merged on import (the later decision wins), and handled by Undo.
 
 Drafts persist per anchor in the browser-preferences record (never the portable review document): they survive view-mode switches and reloads, and reopen visibly at their anchors on load.
 
@@ -61,7 +61,7 @@ Sub-range diffs are computed inside the page (`pd_range_diff` over the embedded 
 
 ## Review changes, Activity, and Undo
 
-Material review changes — comments added, updated, resolved, reopened, or deleted, the verdict, and files marked viewed — are journaled as stable-ID operations in their own `…:activity` record. The pinned row shows the change count (a link to the Activity section) and **Undo**, which inverts the most recent operation through the same engine calls that made it. View preferences (wrap, theme, collapse, drafts) are comfort state, not journal material.
+Material review changes — comments added, updated, resolved, reopened, or deleted, the single final verdict action, and files marked viewed — are journaled as stable-ID operations in their own `…:activity` record. The pinned row shows the change count (a link to the Activity section) and **Undo**, which inverts the most recent operation through the same engine calls that made it. View preferences (wrap, theme, collapse, drafts) are comfort state, not journal material.
 
 ## Review progress (viewed files)
 

@@ -478,8 +478,11 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   );
   page.push_str("</style>\n</head>\n<body>\n");
 
-  let desc_link =
-    if doc.description.is_some() { r##"<a class="chrome-link" href="#description">Description</a>"## } else { "" };
+  let desc_link = if doc.description.is_some() {
+    r##"<a class="chrome-link section-link" href="#description">Description</a>"##
+  } else {
+    ""
+  };
 
   page.push_str(&format!(
     r##"<header class="review-intro">
@@ -497,13 +500,13 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <nav id="topnav" class="app-chrome" aria-label="Review navigation">
 <div class="chrome-links">
 <button type="button" id="review-back" title="Return to the page that opened this review">← Back</button>
-{desc_link}<a class="chrome-link" href="#commits">Commits</a>
-<a class="chrome-link" href="#files">Files changed</a>
-<a class="chrome-link" href="#diff">Diff</a>
+{desc_link}<a class="chrome-link section-link" href="#commits">Commits</a>
+<a class="chrome-link section-link" href="#files">Files changed</a>
+<a class="chrome-link section-link" href="#diff">Diff</a>
 </div>
 <div id="current-file-context" class="current-file-context" aria-live="polite"></div>
 <div class="chrome-actions">
-<span class="seg verdict-seg" role="group" aria-label="Review verdict"><button type="button" id="verdict-approve" aria-pressed="false" title="Approve the whole change; click again to clear">Approve</button><button type="button" id="verdict-changes" aria-pressed="false" title="The change needs work; click again to clear">Require changes</button></span>
+<span class="verdict-actions" role="group" aria-label="Review outcome"><button type="button" id="verdict-comment" aria-pressed="true" title="Leave comments without submitting a verdict">Comment</button><button type="button" id="verdict-approve" aria-pressed="false" title="Approve the whole change">Approve</button><button type="button" id="verdict-changes" aria-pressed="false" title="Submit a review requiring changes">Require changes</button></span>
 <button type="button" id="view-toggle" disabled aria-pressed="false" title="Not enough horizontal space to render side-by-side">Side-by-side</button>
 <button type="button" id="comment-count" class="review-summary" hidden>0 comments</button>
 <a id="change-count" class="chrome-link" href="#activity" hidden>0 changes</a>

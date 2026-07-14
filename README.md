@@ -22,7 +22,7 @@ Wrote review.html (12 files, +345 −67, 5 commits)
 Open `review.html` anywhere — from disk (`file://`), over any static host, or mailed to a colleague. The page makes **zero network requests**: CSS, the diff, and the comment engine are all inside the one file.
 
 - **Comment from the gutter** (`+` on every commentable line, or the line itself; Ctrl/Cmd+Enter saves; markdown with Write/Preview) — works in unified, split, and rendered Markdown. Comments persist in localStorage, keyed to the exact diff content, so a regenerated identical diff keeps them.
-- **GitHub-shaped review state**: an **Approve | Require changes** verdict on the whole change, and per-comment **Resolve** — journaled, undoable, carried by exports and imports (the later decision wins on merge).
+- **GitHub-shaped review state**: choose **Comment**, **Approve**, or **Require changes**, and resolve individual comments. Comment adds no verdict action; either verdict contributes one final action and is carried by exports and imports (the later decision wins on merge).
 - **Document-first layout**: a plain-language summary, then Description, Commits, Files changed, Diff, and Activity in one readable sequence; a single pinned navigation row tracks the current file (breadcrumbs, stats, comment count) as you scroll, with Undo and a review-change journal one click away.
 - **Markdown files render**: `.md` files open in the rendered view (added green, removed red); a **Rendered | Source** pill switches while preserving place.
 - **Filter by commits**: click two endpoints or drag across commit rows to select a commit or range (computed in-page by the WASM engine); range views are clearly read-only.

@@ -137,6 +137,19 @@ test('document summary and stable navigation are present without a sidebar', asy
   await expect(firstFile).toBeAttached();
 });
 
+test('navigation stays pinned and highlights the section being scrolled', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 500 });
+  const nav = page.locator('#topnav');
+  const sectionIds = ['description', 'commits', 'files', 'diff'];
+  for (const id of sectionIds) {
+    await page.locator('#' + id).evaluate((el) => el.scrollIntoView({ block: 'start' }));
+    await expect(nav.locator('.section-link[href="#' + id + '"]')).toHaveAttribute('aria-current', 'location');
+    const top = await nav.evaluate((el) => el.getBoundingClientRect().top);
+    expect(top).toBe(0);
+  }
+  await expect(nav.locator('.section-link.active')).toHaveCount(1);
+});
+
 test('Back control returns to the page that opened the review', async ({ page }) => {
   await page.goto('about:blank');
   await page.goto(fixture.fileUrl);
@@ -222,12 +235,17 @@ test('older-generation stores are absorbed by merge, never clobbered', async ({ 
   await expect(page.locator('.comment-card')).toContainText('newer old-page note');
 });
 
-test('verdict and resolve are material, undoable review state', async ({ page }) => {
+test('review outcome contributes at most one final action', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  // Verdict: Require changes → persists across reload; Approve replaces it;
-  // undo restores the previous decision.
+  // Comment is the default no-verdict outcome and is not an action.
+  await expect(page.locator('#verdict-comment')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#change-count')).toBeHidden();
+
+  // A submitted verdict contributes exactly one final action.
   await page.locator('#verdict-changes').click();
   await expect(page.locator('#verdict-changes')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#change-count')).toHaveText('1 change');
+  await expect(page.locator('#undo-change')).toBeEnabled();
   await page.reload();
   await page.waitForFunction(() => {
     const el = document.getElementById('comment-count');
@@ -237,9 +255,38 @@ test('verdict and resolve are material, undoable review state', async ({ page })
   await page.locator('#verdict-approve').click();
   await expect(page.locator('#verdict-approve')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#verdict-changes')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('#change-count')).toHaveText('1 change');
+
+  // Undo removes that one final verdict and returns to Comment.
   await page.locator('#undo-change').click();
-  await expect(page.locator('#verdict-changes')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('#verdict-approve')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('#verdict-comment')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#change-count')).toBeHidden();
+
+  // Returning to Comment removes the verdict action.
+  await page.locator('#verdict-approve').click();
+  await page.locator('#verdict-comment').click();
+  await expect(page.locator('#verdict-comment')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#change-count')).toBeHidden();
+  await expect(page.locator('#undo-change')).toBeDisabled();
+
+  // Repeated verdict entries written by an older page compact to one action.
+  await page.evaluate(() => {
+    const docKey = Object.keys(localStorage).find((key) => /^packdiff:v\d+:diff:[^:]+$/.test(key));
+    localStorage.setItem(docKey + ':activity', JSON.stringify([
+      { kind: 'verdict', label: 'Changes required', at: '2026-07-14T09:00:00Z' },
+      { kind: 'verdict', label: 'Change approved', at: '2026-07-14T09:01:00Z' },
+    ]));
+  });
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById('verdict-approve'));
+  await expect(page.locator('#change-count')).toHaveText('1 change');
+  await expect(page.locator('#activity-body')).toContainText('Change approved');
+
+  // Review outcomes are independent action buttons, not a segmented
+  // presentation-mode control such as Unified / Side-by-side.
+  await expect(page.locator('.verdict-seg')).toHaveCount(0);
+  await page.locator('#verdict-approve').focus();
+  await expect(page.locator('#verdict-approve')).toHaveCSS('outline-style', 'solid');
 
   // Resolve: a resolved comment dims in place and the chrome count splits.
   await page.evaluate(() => {
