@@ -45,9 +45,10 @@ Please follow the shared [engineering principles](https://github.com/dkorolev/pr
 ## Review changes, local state, and Activity
 
 - Keep two durable tiers in the data model:
-  - **Review changes** are material, auditable, reversible, and eventually pushable: comments and their resolution, the review verdict, Viewed status, deletion/restoration, and future shared events.
-- Review state mimics GitHub (decision 2026-07-13): the entire change carries one verdict — Approved or ChangesRequired — and individual comments are resolvable. There is no per-comment kind taxonomy.
+  - **Review changes** are material, auditable, reversible, and eventually pushable: comments and their resolution, the final review verdict, Viewed status, deletion/restoration, and future shared events.
   - **Local state** is durable comfort and recovery data: drafts, wrapping, Markdown presentation, collapse state, theme, and similar preferences.
+- Review state mimics GitHub (decision 2026-07-13): the entire change carries one verdict — Approved or ChangesRequired — and individual comments are resolvable. There is no per-comment kind taxonomy.
+- Review submission has three choices: Comment (no verdict action), Approve, or Require changes. Approve and Require changes contribute exactly one final Activity action; switching between them replaces that action, while returning to Comment removes it.
 - Reserve a stable pinned-row status for the number of Review changes and Undo. Clicking the count eventually navigates to a real Activity section, not a drawer.
 - Activity should minimally but visibly distinguish Review changes from Local state. Its detailed UX is not designed yet.
 - Model material changes as stable-ID journal operations rather than whole document replacement. Keep the schema compatible with deterministic, CRDT-style merging of future new comments and commits; do not implement sync yet.

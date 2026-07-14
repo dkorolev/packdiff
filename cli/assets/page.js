@@ -241,10 +241,20 @@
   let activity = [];
   try { activity = JSON.parse(localStorage.getItem(ACT_KEY)) || []; } catch (e) { activity = []; }
   if (!Array.isArray(activity)) activity = [];
+  // Older pages appended every verdict toggle. A review has at most one final
+  // verdict action: compact the history to its latest non-cleared outcome.
+  const verdictActivity = activity.filter((entry) => entry && entry.kind === 'verdict');
+  const hadVerdictActivity = verdictActivity.length > 0;
+  if (hadVerdictActivity) {
+    const latest = verdictActivity[verdictActivity.length - 1];
+    activity = activity.filter((entry) => !entry || entry.kind !== 'verdict');
+    if (latest.label !== 'Verdict cleared') activity.push(latest);
+  }
   function saveActivity() {
     if (memoryOnly) return;
     try { localStorage.setItem(ACT_KEY, JSON.stringify(activity)); } catch (e) { /* keep in memory */ }
   }
+  if (hadVerdictActivity) saveActivity();
   function pushActivity(entry) {
     entry.id = genId();
     entry.at = new Date().toISOString();
@@ -479,7 +489,7 @@
       let next;
       try {
         if (entry.kind === 'comment_added') next = callWasm('pd_delete_comment', JSON.stringify(doc), entry.comment_id);
-        else if (entry.kind === 'verdict') next = callWasm('pd_set_verdict', JSON.stringify(doc), JSON.stringify(entry.previous || null));
+        else if (entry.kind === 'verdict') next = callWasm('pd_set_verdict', JSON.stringify(doc), 'null');
         else next = callWasm('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(entry.comment));
       } catch (e) {
         activity.push(entry);
@@ -498,33 +508,36 @@
   });
 
   // ---- review verdict ----
-  // GitHub-shaped: the whole change is Approved or ChangesRequired; clicking
-  // the active state clears it back to in-progress. Material review state:
-  // engine-mutated (pd_set_verdict), journaled, undoable.
+  // Comment is the no-verdict state. Approved and ChangesRequired each occupy
+  // exactly one final journal action; changing the outcome replaces it.
   function renderVerdict() {
+    const comment = document.getElementById('verdict-comment');
     const approve = document.getElementById('verdict-approve');
     const changes = document.getElementById('verdict-changes');
-    if (!approve || !changes) return;
+    if (!comment || !approve || !changes) return;
     const key = doc && doc.verdict ? Object.keys(doc.verdict)[0] : null;
+    comment.setAttribute('aria-pressed', key === null ? 'true' : 'false');
     approve.setAttribute('aria-pressed', key === 'Approved' ? 'true' : 'false');
     changes.setAttribute('aria-pressed', key === 'ChangesRequired' ? 'true' : 'false');
   }
   function setVerdict(variant) {
     const current = doc.verdict ? Object.keys(doc.verdict)[0] : null;
-    const target = current === variant ? null : {};
+    if (current === variant) return;
+    const target = variant === null ? null : {};
     if (target) target[variant] = { at: new Date().toISOString() };
     let next;
     try { next = callWasm('pd_set_verdict', JSON.stringify(doc), JSON.stringify(target)); }
     catch (e) { showError('Verdict failed: ' + e.message); return; }
-    pushActivity({
+    activity = activity.filter((entry) => !entry || entry.kind !== 'verdict');
+    saveActivity();
+    if (target) pushActivity({
       kind: 'verdict',
-      label: target === null ? 'Verdict cleared'
-        : variant === 'Approved' ? 'Change approved' : 'Changes required',
-      previous: doc.verdict || null,
+      label: variant === 'Approved' ? 'Change approved' : 'Changes required',
     });
     persist(next);
     renderVerdict();
   }
+  document.getElementById('verdict-comment').addEventListener('click', () => setVerdict(null));
   document.getElementById('verdict-approve').addEventListener('click', () => setVerdict('Approved'));
   document.getElementById('verdict-changes').addEventListener('click', () => setVerdict('ChangesRequired'));
 
@@ -1836,8 +1849,9 @@
         if (p.getBoundingClientRect().top <= top + 4) current = p;
       }
       renderCurrentFile(current);
-      // chrome section links
-      const links = document.querySelectorAll('#topnav a.chrome-link');
+      // The four document-section tabs follow passive scrolling as well as
+      // explicit anchor navigation. Other chrome links are not scroll-spy tabs.
+      const links = document.querySelectorAll('#topnav a.section-link');
       const sections = Array.prototype.map.call(links, (a) => {
         const id = a.getAttribute('href').slice(1);
         return { a: a, sec: document.getElementById(id) };
@@ -1847,7 +1861,12 @@
         for (const s of sections) {
           if (s.sec.getBoundingClientRect().top <= top + 4) cur = s;
         }
-        for (const s of sections) s.a.classList.toggle('active', s === cur);
+        for (const s of sections) {
+          const active = s === cur;
+          s.a.classList.toggle('active', active);
+          if (active) s.a.setAttribute('aria-current', 'location');
+          else s.a.removeAttribute('aria-current');
+        }
         const passiveId = current && cur.sec.id === 'diff' ? current.id : cur.sec.id;
         if (passiveId && location.hash !== '#' + passiveId) history.replaceState(null, '', '#' + passiveId);
       }
