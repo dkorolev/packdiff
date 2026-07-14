@@ -1029,6 +1029,15 @@ tr.comment-row td, tr.editor-row td {
   padding: 2px 12px;
   color: var(--muted);
 }
+.md-preview ul, .md-preview ol,
+.comment-body ul, .comment-body ol,
+.editor-preview ul, .editor-preview ol {
+  margin: 6px 0;
+  padding-inline-start: 2em;
+}
+.md-preview li > ul, .md-preview li > ol,
+.comment-body li > ul, .comment-body li > ol,
+.editor-preview li > ul, .editor-preview li > ol { margin: 2px 0; }
 .md-preview h1, .md-preview h2 { border-bottom: 1px solid var(--border); padding-bottom: 4px; }
 .md-preview p, .comment-body p, .editor-preview p { margin: 6px 0; }
 
@@ -1244,7 +1253,7 @@ tr.comment-row td, tr.editor-row td {
 .no-js-only { display: none; }
 
 /* ---- document-first v1 ----------------------------------------------- */
-.review-intro { max-width: 1400px; margin: 0 auto; padding: 20px 20px 12px; }
+.review-intro { margin: 0; padding: 20px 4px 12px; }
 .review-summary-text { margin: 0 0 8px; color: var(--muted); }
 .review-summary-text strong { color: var(--fg); }
 .review-details { display: inline-block; font-size: 12px; color: var(--muted); }

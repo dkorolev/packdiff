@@ -107,6 +107,22 @@
     if (history.length > 1) history.back();
     else window.close();
   });
+  // In-document navigation replaces the current URL instead of adding a
+  // history entry: Back always leaves the review. Browser-tested in
+  // "Back control returns to the page that opened the review".
+  document.addEventListener('click', (ev) => {
+    const link = ev.target.closest('a[href^="#"]');
+    if (!link) return;
+    const id = link.getAttribute('href').slice(1);
+    const target = document.getElementById(id);
+    if (!target) return;
+    ev.preventDefault();
+    if (target.matches('details.file')) target.open = true;
+    target.scrollIntoView({ block: 'start' });
+    target.setAttribute('tabindex', '-1');
+    target.focus({ preventScroll: true });
+    history.replaceState(null, '', '#' + id);
+  });
 
   // ---- browser preferences (not part of the review document) ----
   const DEFAULT_PREFS = {
@@ -1029,7 +1045,7 @@
     if (start !== end) {
       ev.preventDefault();
       setRange(Math.min(start, end), Math.max(start, end));
-      history.pushState({ range: [Math.min(start, end), Math.max(start, end)] }, '', '#commits');
+      history.replaceState({ range: [Math.min(start, end), Math.max(start, end)] }, '', '#commits');
     }
   });
   const rangeReset = document.getElementById('range-reset');
@@ -1249,14 +1265,17 @@
 
   // ---- expand hunk context ----
   // Snapshots carry the full endpoint contents of every changed file, so the
-  // page can reveal the unchanged lines a hunk gap hides. Each gap gets an
-  // expander row; a click reveals up to EXPAND_STEP lines adjacent to the
-  // diff via pd_context_slice (the engine guarantees the region is identical
-  // at both endpoints). Revealed rows are real commentable context rows with
-  // the same anchors as build-time rows. Gap sizes come from the hunk
-  // headers plus the endpoint line counts stamped on the file panel — no
-  // probing. Trailing gaps reveal from the top (adjacent to the hunk above);
-  // every other gap reveals from the bottom (adjacent to the hunk below).
+  // page can reveal the unchanged lines a hunk gap hides. Gaps shorter than
+  // COLLAPSE_MIN render immediately; every larger gap gets an expander row,
+  // and a click reveals up to EXPAND_STEP lines adjacent to the diff via
+  // pd_context_slice (the engine guarantees the region is identical at both
+  // endpoints). Revealed rows are real commentable context rows with the same
+  // anchors as build-time rows. Gap sizes come from the hunk headers plus the
+  // endpoint line counts stamped on the file panel — no probing. Trailing
+  // gaps reveal from the top (adjacent to the hunk above); every other gap
+  // reveals from the bottom (adjacent to the hunk below). Browser-tested in
+  // "short hunk gaps stay visible" and "hunk context expands".
+  const COLLAPSE_MIN = 3;
   const EXPAND_STEP = 20;
   function hunkBounds(headerText) {
     const m = /@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(headerText);
@@ -1299,6 +1318,17 @@
     tr.appendChild(td);
     return tr;
   }
+  function gapContent(file, gap) {
+    const count = gap.oldTo - gap.oldFrom + 1;
+    if (count >= COLLAPSE_MIN) return expanderRow(gap);
+    try {
+      return contextFragment(file, gap.oldFrom, gap.newFrom, count);
+    } catch (e) {
+      // Keep the context reachable if eager expansion fails; clicking the
+      // fallback expander reports the underlying error through the normal UI.
+      return expanderRow(gap);
+    }
+  }
   function setupExpanders() {
     if (!SNAPSHOTS) return;
     document.querySelectorAll('#files-full details.file').forEach((file) => {
@@ -1314,21 +1344,23 @@
         const bounds = hunkBounds(row.cells[row.cells.length - 1].textContent);
         if (!bounds) continue;
         if (bounds.oldFirst > prevOld + 1) {
-          row.before(expanderRow({
+          const gap = {
             oldFrom: prevOld + 1, oldTo: bounds.oldFirst - 1,
             newFrom: prevNew + 1, newTo: bounds.newFirst - 1,
-          }));
+          };
+          row.before(gapContent(file, gap));
         }
         prevOld = bounds.oldLast;
         prevNew = bounds.newLast;
         sawHunk = true;
       }
       if (sawHunk && Number(d.oldLines) > prevOld) {
-        (table.tBodies[0] || table).appendChild(expanderRow({
+        const gap = {
           oldFrom: prevOld + 1, oldTo: Number(d.oldLines),
           newFrom: prevNew + 1, newTo: Number(d.newLines),
           trailing: true,
-        }));
+        };
+        (table.tBodies[0] || table).appendChild(gapContent(file, gap));
       }
     });
   }
@@ -1369,6 +1401,23 @@
     tr.appendChild(code);
     return tr;
   }
+  function contextFragment(file, oldStart, newStart, count) {
+    const lines = callWasm('pd_context_slice', SNAPSHOTS, JSON.stringify({
+      old_path: file.dataset.oldPath, new_path: file.dataset.newPath,
+      old_start: oldStart, new_start: newStart, count: count,
+    }));
+    let highlighted = null;
+    try {
+      highlighted = callWasm('pd_highlight_lines', file.dataset.anchor,
+        JSON.stringify(lines.map((line) => line.Ctx.text)));
+    } catch (e) { /* safe plain-text fallback in contextRow */ }
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].Ctx) frag.appendChild(contextRow(
+        file.dataset.anchor, lines[i].Ctx, highlighted ? highlighted[i] : null));
+    }
+    return frag;
+  }
   // Split tables carry cloned proxy expanders; resolve back to the unified
   // original (the single source of gap state) by the stable id.
   function unifiedExpanderOf(btn) {
@@ -1394,26 +1443,15 @@
     const take = Math.min(EXPAND_STEP, oldTo - oldFrom + 1);
     if (take <= 0) { tr.remove(); return; }
     const trailing = tr.dataset.trailing === '1';
-    let lines;
+    let frag;
     try {
-      lines = callWasm('pd_context_slice', SNAPSHOTS, JSON.stringify({
-        old_path: file.dataset.oldPath, new_path: file.dataset.newPath,
-        old_start: trailing ? oldFrom : oldTo - take + 1,
-        new_start: trailing ? newFrom : newTo - take + 1,
-        count: take,
-      }));
+      frag = contextFragment(file,
+        trailing ? oldFrom : oldTo - take + 1,
+        trailing ? newFrom : newTo - take + 1,
+        take);
     } catch (e) {
       showError('Expand failed: ' + e.message);
       return;
-    }
-    let highlighted = null;
-    try {
-      highlighted = callWasm('pd_highlight_lines', file.dataset.anchor,
-        JSON.stringify(lines.map((line) => line.Ctx.text)));
-    } catch (e) { /* safe plain-text fallback in contextRow */ }
-    const frag = document.createDocumentFragment();
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].Ctx) frag.appendChild(contextRow(file.dataset.anchor, lines[i].Ctx, highlighted ? highlighted[i] : null));
     }
     if (trailing) {
       tr.before(frag);
@@ -1849,7 +1887,7 @@
         if (p.getBoundingClientRect().top <= top + 4) current = p;
       }
       renderCurrentFile(current);
-      // The four document-section tabs follow passive scrolling as well as
+      // The document-section tabs follow passive scrolling as well as
       // explicit anchor navigation. Other chrome links are not scroll-spy tabs.
       const links = document.querySelectorAll('#topnav a.section-link');
       const sections = Array.prototype.map.call(links, (a) => {
@@ -1924,7 +1962,7 @@
     row.setAttribute('tabindex', '-1'); row.focus({ preventScroll: true });
     for (const link of links) link.closest('tr').classList.add('arrival-flash');
     setTimeout(() => links.forEach((link) => link.closest('tr').classList.remove('arrival-flash')), 950);
-    history.pushState(null, '', '#files');
+    history.replaceState(null, '', '#files');
   });
 
 
@@ -1983,7 +2021,7 @@
     panels[next].scrollIntoView({ block: 'start' });
     panels[next].setAttribute('tabindex', '-1');
     panels[next].focus({ preventScroll: true });
-    history.pushState(null, '', '#' + panels[next].id);
+    history.replaceState(null, '', '#' + panels[next].id);
   }
   function goComment(delta) {
     const cards = document.querySelectorAll(

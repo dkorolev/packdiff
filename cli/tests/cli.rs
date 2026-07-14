@@ -172,9 +172,10 @@ fn end_to_end() {
   assert!(!html.contains(r#"id="sidebar""#));
   assert!(html.contains(r#"class="review-summary-text""#));
   assert!(html.contains(r#"class="gutter-btn""#), "comment gutter buttons present");
-  for id in ["commits", "files", "diff"] {
+  for id in ["summary", "commits", "files", "diff"] {
     assert!(html.contains(&format!("<section id=\"{id}\"")), "missing #{id} section");
   }
+  assert!(html.contains(r##"href="#summary""##));
   assert!(html.contains(r##"href="#commits""##));
   assert!(html.contains(r##"href="#files""##));
   assert!(html.contains(r##"href="#diff""##));

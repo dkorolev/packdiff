@@ -55,6 +55,9 @@ function makeFixture() {
   // expand-context tests.
   const calcLine = (i) => `line ${i + 1}`;
   write(repo, 'calc.py', Array.from({ length: 60 }, (_, i) => calcLine(i)).join('\n') + '\n');
+  const thresholdLine = (i) => `threshold line ${i + 1}`;
+  write(repo, 'context-threshold.txt',
+    Array.from({ length: 30 }, (_, i) => thresholdLine(i)).join('\n') + '\n');
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-qm', 'initial']);
 
@@ -62,6 +65,8 @@ function makeFixture() {
   write(repo, 'hello.py', "def hello():\n    return 'hello'\n\ndef evil():\n    return 42\n");
   write(repo, 'calc.py',
     Array.from({ length: 60 }, (_, i) => (i === 49 ? 'line 50 CHANGED' : calcLine(i))).join('\n') + '\n');
+  write(repo, 'context-threshold.txt', Array.from({ length: 30 }, (_, i) =>
+    ([4, 13, 23].includes(i) ? `threshold line ${i + 1} CHANGED` : thresholdLine(i))).join('\n') + '\n');
   git(repo, ['rm', '-q', 'todelete.txt']);
   write(repo, 'notes.md', '# Title\n\nBody paragraph updated.\n\n## More\n');
   write(repo, 'newfile.md', '# New\n\nBrand new file.\n');
@@ -73,7 +78,8 @@ function makeFixture() {
   git(repo, ['commit', '-qm', 'feature two']);
 
   // Notes commit: lifts into the Description panel (Preview | Raw).
-  write(repo, 'PR-DESCRIPTION.md', '# Fixture PR\n\nA short description body.\n');
+  write(repo, 'PR-DESCRIPTION.md',
+    '# Fixture PR\n\nA short description body.\n\n- Parent item\n  - Child item\n    - Grandchild item\n- Sibling item\n');
   git(repo, ['add', '-A']);
   const notes = spawnSync(
     'git',
@@ -129,9 +135,14 @@ test('page is self-contained: no network requests after load', async ({ page }) 
 
 test('document summary and stable navigation are present without a sidebar', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await expect(page.locator('#topnav.app-chrome')).toBeVisible();
+  const nav = page.locator('#topnav.app-chrome');
+  await expect(nav).toBeVisible();
+  expect(await nav.evaluate((el) => el.getBoundingClientRect().top)).toBe(0);
   await expect(page.locator('#review-back')).toHaveText('← Back');
-  await expect(page.locator('.review-summary-text')).toBeVisible();
+  await expect(nav.locator('.section-link').first()).toHaveText('Summary');
+  await expect(page.locator('#summary .review-summary-text')).toBeVisible();
+  expect(await page.locator('#summary').evaluate((el) => el.getBoundingClientRect().top))
+    .toBeGreaterThanOrEqual(await nav.evaluate((el) => el.getBoundingClientRect().bottom));
   await expect(page.locator('#sidebar')).toHaveCount(0);
   const firstFile = page.locator('#files-full details.file').first();
   await expect(firstFile).toBeAttached();
@@ -140,7 +151,7 @@ test('document summary and stable navigation are present without a sidebar', asy
 test('navigation stays pinned and highlights the section being scrolled', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 500 });
   const nav = page.locator('#topnav');
-  const sectionIds = ['description', 'commits', 'files', 'diff'];
+  const sectionIds = ['summary', 'description', 'commits', 'files', 'diff'];
   for (const id of sectionIds) {
     await page.locator('#' + id).evaluate((el) => el.scrollIntoView({ block: 'start' }));
     await expect(nav.locator('.section-link[href="#' + id + '"]')).toHaveAttribute('aria-current', 'location');
@@ -153,6 +164,11 @@ test('navigation stays pinned and highlights the section being scrolled', async 
 test('Back control returns to the page that opened the review', async ({ page }) => {
   await page.goto('about:blank');
   await page.goto(fixture.fileUrl);
+  const historyLength = await page.evaluate(() => history.length);
+  for (const id of ['summary', 'description', 'commits', 'files', 'diff']) {
+    await page.locator(`.section-link[href="#${id}"]`).click();
+  }
+  expect(await page.evaluate(() => history.length)).toBe(historyLength);
   await page.locator('#review-back').click();
   await expect(page).toHaveURL('about:blank');
 });
@@ -341,6 +357,19 @@ test('hunk context expands into commentable rows', async ({ page }) => {
   await expect(calc.locator('table.diff.unified tr.expander')).toHaveCount(1);
 });
 
+test('short hunk gaps stay visible while three-line gaps collapse', async ({ page }) => {
+  const file = page.locator('#files-full details.file[data-anchor="context-threshold.txt"]');
+  await file.evaluate((el) => { el.open = true; });
+  // With three context lines, this fixture leaves gaps of 1, 2, 3, and 3
+  // unchanged lines around its hunks. Only the latter two get controls.
+  const expanders = file.locator('table.diff.unified tr.expander .expander-btn');
+  await expect(expanders).toHaveCount(2);
+  await expect(expanders).toHaveText(['Show all 3 hidden lines', 'Show all 3 hidden lines']);
+  for (const line of [1, 9, 10]) {
+    await expect(file.locator(`table.diff.unified tr.ctx[data-line="${line}"]`)).toHaveCount(1);
+  }
+});
+
 test('Preview/Diff pill switches without losing the panel', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const md = page.locator('#files-full details.file').filter({ has: page.locator('.md-seg') }).first();
@@ -357,6 +386,9 @@ test('Description Preview/Raw toggles rendered and source views', async ({ page 
   await expect(desc).toBeVisible();
   await expect(desc.locator('.md-preview')).toBeVisible();
   await expect(desc.locator('h1')).toContainText('Fixture PR');
+  await expect(desc.locator('.md-preview ul ul ul')).toHaveCount(1);
+  expect(await desc.locator('.md-preview ul ul').first().evaluate((el) =>
+    parseFloat(getComputedStyle(el).paddingInlineStart))).toBeGreaterThan(0);
   await desc.locator('.desc-seg button[data-mdview="raw"]').click();
   await expect(desc.locator('.desc-raw')).toBeVisible();
   await expect(desc.locator('.md-preview')).toBeHidden();
@@ -452,7 +484,9 @@ test('expand and collapse all files persist across restart', async ({ page }) =>
 
 test('keyboard help opens with ?', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.locator('body').click();
+  // Use an explicit non-typing focus target: clicking the document body can
+  // legitimately land on a full-row comment target and open its editor.
+  await page.locator('#review-back').focus();
   await page.keyboard.press('?');
   await expect(page.locator('#help-dialog')).toBeVisible();
   await page.locator('#help-close').click();
