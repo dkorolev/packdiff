@@ -7,7 +7,7 @@
 //! cannot smuggle markup or `javascript:` URLs.
 //!
 //! Deliberately a SUBSET (documented in docs/PAGE.md): ATX headings, fenced
-//! code blocks, flat (non-nested) lists, blockquotes, thematic breaks,
+//! code blocks, nested lists, blockquotes, thematic breaks,
 //! paragraphs; inline `` `code` ``, `**bold**`, `*italic*`, and
 //! `[links](https://…)`. Underscores are NOT emphasis, so `snake_case`
 //! identifiers survive verbatim. A single newline inside a paragraph is a
@@ -111,25 +111,8 @@ fn one_block(lines: &[&str], start: usize, depth: u32) -> (usize, String) {
     }
     return (i, format!("<blockquote>{}</blockquote>", blocks_to_html(&inner, depth + 1)));
   }
-  if unordered_item(trimmed).is_some() {
-    let mut out = String::from("<ul>");
-    while i < lines.len() {
-      let Some(item) = unordered_item(lines[i].trim_start()) else { break };
-      out.push_str(&format!("<li>{}</li>", inline(item, depth)));
-      i += 1;
-    }
-    out.push_str("</ul>");
-    return (i, out);
-  }
-  if ordered_item(trimmed).is_some() {
-    let mut out = String::from("<ol>");
-    while i < lines.len() {
-      let Some(item) = ordered_item(lines[i].trim_start()) else { break };
-      out.push_str(&format!("<li>{}</li>", inline(item, depth)));
-      i += 1;
-    }
-    out.push_str("</ol>");
-    return (i, out);
+  if list_item(lines[i]).is_some() {
+    return list_block(lines, i, depth);
   }
   // Paragraph: consecutive plain lines; each single newline is a hard break.
   let mut parts: Vec<String> = Vec::new();
@@ -188,6 +171,54 @@ fn ordered_item(trimmed: &str) -> Option<&str> {
     return None;
   }
   trimmed[digits..].strip_prefix(". ")
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ListKind {
+  Unordered,
+  Ordered,
+}
+
+/// Leading byte indentation, marker kind, and item content. Markdown list
+/// indentation is relative, so any deeper run nests beneath the current item.
+fn list_item(line: &str) -> Option<(usize, ListKind, &str)> {
+  let trimmed = line.trim_start_matches([' ', '\t']);
+  let indent = line.len() - trimmed.len();
+  if let Some(item) = unordered_item(trimmed) {
+    Some((indent, ListKind::Unordered, item))
+  } else {
+    ordered_item(trimmed).map(|item| (indent, ListKind::Ordered, item))
+  }
+}
+
+fn list_block(lines: &[&str], start: usize, depth: u32) -> (usize, String) {
+  let (base_indent, kind, _) = list_item(lines[start]).expect("list_block starts on a recognized list item");
+  let (open, close) = match kind {
+    ListKind::Unordered => ("<ul>", "</ul>"),
+    ListKind::Ordered => ("<ol>", "</ol>"),
+  };
+  let mut out = String::from(open);
+  let mut i = start;
+  while i < lines.len() {
+    let Some((indent, item_kind, item)) = list_item(lines[i]) else { break };
+    if indent != base_indent || item_kind != kind {
+      break;
+    }
+    out.push_str(&format!("<li>{}", inline(item, depth)));
+    i += 1;
+    while i < lines.len() && depth < MAX_DEPTH {
+      let Some((nested_indent, _, _)) = list_item(lines[i]) else { break };
+      if nested_indent <= base_indent {
+        break;
+      }
+      let (next, nested) = list_block(lines, i, depth + 1);
+      out.push_str(&nested);
+      i = next;
+    }
+    out.push_str("</li>");
+  }
+  out.push_str(close);
+  (i, out)
 }
 
 /// Emphasis content must be non-empty and not whitespace-flanked, so a bare
@@ -309,6 +340,18 @@ mod tests {
     assert_eq!(to_html("1. a\n2. b"), "<ol><li>a</li><li>b</li></ol>");
     assert_eq!(to_html("> quoted\n> more"), "<blockquote><p>quoted<br>more</p></blockquote>");
     assert_eq!(to_html("---"), "<hr>");
+  }
+
+  #[test]
+  fn nested_lists_preserve_source_indentation() {
+    assert_eq!(
+      to_html("- parent\n  - child\n    - grandchild\n- sibling"),
+      "<ul><li>parent<ul><li>child<ul><li>grandchild</li></ul></li></ul></li><li>sibling</li></ul>"
+    );
+    assert_eq!(
+      to_html("1. parent\n   - child\n2. sibling"),
+      "<ol><li>parent<ul><li>child</li></ul></li><li>sibling</li></ol>"
+    );
   }
 
   #[test]

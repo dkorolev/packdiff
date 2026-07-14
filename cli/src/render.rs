@@ -483,9 +483,9 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   } else {
     ""
   };
-
-  page.push_str(&format!(
-    r##"<header class="review-intro">
+  let summary_html = format!(
+    r##"<section id="summary" class="review-intro">
+<h2>Summary</h2>
 <p class="review-summary-text"><strong>{ncommits}</strong> commit(s) · <strong>{nfiles}</strong> file(s) changed · <span class="adds">+{adds}</span> <span class="dels">−{dels}</span> · click any diff line to comment (Markdown supported). Review state is saved locally for this exact diff.</p>
 <details class="review-details">
 <summary>Details</summary>
@@ -496,10 +496,28 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <span>Schema</span><span>v{schema}</span>
 </div>
 </details>
-</header>
-<nav id="topnav" class="app-chrome" aria-label="Review navigation">
+</section>
+"##,
+    repo = esc(&doc.repo),
+    base = esc(&doc.base.name),
+    base_sha = esc(&short(&doc.base.sha)),
+    head = esc(&doc.head.name),
+    head_sha = esc(&short(&doc.head.sha)),
+    mb = esc(&short(&doc.merge_base)),
+    gen = esc(&doc.generated_at),
+    tool = esc(&tool_label),
+    schema = doc.schema_version,
+    ncommits = ncommits,
+    nfiles = nfiles_count,
+    adds = adds,
+    dels = dels,
+  );
+
+  page.push_str(&format!(
+    r##"<nav id="topnav" class="app-chrome" aria-label="Review navigation">
 <div class="chrome-links">
 <button type="button" id="review-back" title="Return to the page that opened this review">← Back</button>
+<a class="chrome-link section-link" href="#summary">Summary</a>
 {desc_link}<a class="chrome-link section-link" href="#commits">Commits</a>
 <a class="chrome-link section-link" href="#files">Files changed</a>
 <a class="chrome-link section-link" href="#diff">Diff</a>
@@ -534,20 +552,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 </div>
 <div id="toast" hidden role="status" aria-live="polite"></div>
 "##,
-    repo = esc(&doc.repo),
-    base = esc(&doc.base.name),
-    base_sha = esc(&short(&doc.base.sha)),
-    head = esc(&doc.head.name),
-    head_sha = esc(&short(&doc.head.sha)),
-    mb = esc(&short(&doc.merge_base)),
-    gen = esc(&doc.generated_at),
-    tool = esc(&tool_label),
-    schema = doc.schema_version,
     desc_link = desc_link,
-    ncommits = ncommits,
-    nfiles = nfiles_count,
-    adds = adds,
-    dels = dels,
   ));
 
   page.push_str(r#"<main id="content">"#);
@@ -555,6 +560,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
     r#"<div id="unanchored" hidden><strong>Unanchored comments</strong> <span class="muted">(their diff lines are not in this rendering — e.g. regenerated with different context)</span></div>
 "#,
   );
+  page.push_str(&summary_html);
   if let Some(d) = &doc.description {
     page.push_str(
       r#"<section id="description"><h2 class="desc-heading">Description <span class="seg md-seg desc-seg" role="group" aria-label="Description view"><button type="button" data-mdview="preview" class="active" aria-pressed="true">Rendered</button><button type="button" data-mdview="raw" aria-pressed="false">Source</button></span></h2>"#,

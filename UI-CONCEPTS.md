@@ -4,10 +4,10 @@ Please follow the shared [engineering principles](https://github.com/dkorolev/pr
 
 ## The review is a document
 
-- Present the review in a human-readable sequence: Description, Commits, Files changed, Diff, and, when implemented, Activity.
-- Put a plain-language review summary above the navigation. It scrolls away; only one stable navigation row remains pinned.
+- Present the review in a human-readable sequence: Summary, Description, Commits, Files changed, Diff, and, when implemented, Activity.
+- Keep the stable navigation row pinned at the very top from first paint. Put the plain-language review summary in a leftmost Summary section below it.
 - The Files changed section is the file index. Do not duplicate it with a permanent sidebar.
-- Details such as repository, refs, merge-base, generation time, tool version, and schema belong near the summary in disclosure that scrolls away.
+- Details such as repository, refs, merge-base, generation time, tool version, and schema belong in disclosure within the Summary section.
 
 ## Pinned navigation and file context
 
@@ -33,7 +33,7 @@ Please follow the shared [engineering principles](https://github.com/dkorolev/pr
 - Support press-and-drag across commit rows, with two endpoint clicks as the precise and keyboard-accessible equivalent.
 - Render the selected range when the gesture completes; do not add an Apply step.
 - If a range excludes comments, report how many are outside it and provide a direct Show full diff action.
-- Treat applying a range as browser-history-worthy view navigation. Back restores the prior range, viewport, and focus.
+- Keep range selection within the review's current browser-history entry. Reset restores the full range; Back leaves the review page.
 
 ## Local review identity and transfer
 
@@ -56,8 +56,9 @@ Please follow the shared [engineering principles](https://github.com/dkorolev/pr
 
 ## Navigation behavior
 
-- Explicit navigation scrolls and focuses the exact named target, updates the URL, and uses `pushState`.
+- Explicit navigation scrolls and focuses the exact named target and replaces the current URL fragment without adding browser history.
 - Passive scrolling updates the current URL fragment with `replaceState` so a copied URL remains useful without polluting Back/Forward history.
+- Back always returns to the page that opened the review; in-review navigation never consumes it.
 - Give programmatic landings a subtle, temporary highlight.
 - Persist presentation choices without adding them to browser history or the material mutation ledger.
 
