@@ -435,7 +435,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
     Some((old, new))
   };
   let files_html: String = if doc.files.is_empty() {
-    r#"<p class="muted">No changes between these refs.</p>"#.to_string()
+    String::new()
   } else {
     doc.files.iter().enumerate().map(|(i, f)| render_file(i, f, endpoint_lines(f))).collect()
   };
@@ -637,5 +637,24 @@ mod tests {
   fn assets_are_embedded() {
     assert!(CSS.contains("--accent"), "page.css must be embedded");
     assert!(JS.contains("pd_storage_key") || JS.contains("'use strict'"), "page.js must be embedded");
+  }
+
+  #[test]
+  fn empty_review_states_the_absence_of_changes_once() {
+    let commit = "a".repeat(40);
+    let reference = packdiff_dto::RefInfo { name: "main".to_string(), sha: commit.clone() };
+    let doc = DiffDocument::new(
+      "repo".to_string(),
+      reference.clone(),
+      reference,
+      commit,
+      "2026-07-16T12:00:00Z".to_string(),
+      Vec::new(),
+      Vec::new(),
+      None,
+      None,
+    );
+    let html = render_page(&doc, None, b"\0asm");
+    assert_eq!(html.matches("No changes between these refs.").count(), 1);
   }
 }

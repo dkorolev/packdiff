@@ -1281,17 +1281,57 @@ tr.comment-row td, tr.editor-row td {
 .context-drafts, .file-draft-count { color: #9a6700; font-weight: 600; }
 .review-summary { min-width: 92px; justify-content: center; }
 .review-summary[hidden] { visibility: hidden; display: inline-flex !important; }
-#change-count { min-width: 72px; text-align: center; }
-#change-count[hidden] { visibility: hidden; display: inline-block !important; }
 #undo-change { min-width: 52px; justify-content: center; }
-.activity-list { margin: 0; padding-left: 22px; color: var(--fg); }
-.activity-list li { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.actions-control {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(68px, 1fr) auto;
+  width: 112px;
+  min-width: 112px;
+  min-height: var(--control-h);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.actions-control:hover, .actions-control:has(details[open]) { border-color: var(--accent); }
+.actions-control .menu { position: static; min-width: 0; }
+.actions-control .menu > summary {
+  min-width: 0;
+  height: 100%;
+  min-height: calc(var(--control-h) - 2px);
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+}
+.actions-control .menu > summary:hover,
+.actions-control .menu[open] > summary { border-color: transparent; }
+.actions-control:has(#change-count:not([hidden])) .menu > summary { border-radius: 5px 0 0 5px; }
+.actions-control .menu-panel { right: 0; top: calc(100% + 4px); }
+#change-count {
+  min-width: 38px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  border-left: 1px solid var(--border);
+  border-radius: 0 5px 5px 0;
+  font-weight: 700;
+  text-decoration: none;
+}
+#change-count:hover { background: var(--accent-soft); text-decoration: none; }
+#change-count[hidden] { display: none; }
+.change-list { margin: 0; padding-left: 22px; color: var(--fg); }
+.change-list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.change-list time { margin-left: 6px; color: var(--muted); font-size: 12px; }
 button.danger { color: var(--danger); border-color: var(--danger); }
 .shortcut-note { border-top: 1px solid var(--border); margin-top: 6px; padding: 8px; color: var(--muted); font-size: 11px; }
+.shortcut-note > div { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 8px; padding: 2px 0; }
+.shortcut-note > div > span:first-child { white-space: nowrap; }
 kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--panel); }
 .menu-label { display: block; padding: 4px 8px; color: var(--muted); font-size: 11px; }
-.menu-panel .theme-seg { width: 100%; margin-bottom: 4px; }
-.menu-panel .theme-seg button { width: auto; justify-content: center; margin: 0; }
+.menu-panel .theme-seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; margin-bottom: 4px; }
+.menu-panel .theme-seg button { width: 100%; justify-content: center; margin: 0; padding-inline: 8px; }
 
 main#content { max-width: 1400px; padding-top: 8px; }
 body.view-split main#content { max-width: 1920px; }

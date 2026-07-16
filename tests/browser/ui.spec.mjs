@@ -480,6 +480,13 @@ test('per-file wrapping and theme preference persist', async ({ page }) => {
   await file.locator('.file-wrap-toggle').click();
   await expect(file).toHaveClass(/nowrap-lines/);
   await page.locator('#actions-menu').evaluate((el) => { el.open = true; });
+  const themeWidths = await page.locator('.theme-seg').evaluate((seg) => ({
+    outer: seg.getBoundingClientRect().width,
+    buttons: Array.from(seg.querySelectorAll('button')).map((button) => button.getBoundingClientRect().width),
+  }));
+  expect(Math.max(...themeWidths.buttons) - Math.min(...themeWidths.buttons)).toBeLessThan(1);
+  expect(themeWidths.buttons.reduce((sum, width) => sum + width, 0)).toBeCloseTo(themeWidths.outer - 2, 0);
+  await expect(page.locator('.shortcut-note > div')).toHaveCount(3);
   await page.locator('#theme-dark').click({ force: true });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
