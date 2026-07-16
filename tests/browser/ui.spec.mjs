@@ -407,6 +407,38 @@ test('Description Markdown/Source toggles rendered and source views', async ({ p
   await expect(desc.locator('.desc-raw')).toBeHidden();
 });
 
+test('empty comment composers move to a new line and dismiss on click-away', async ({ page }) => {
+  const desc = page.locator('#description');
+  await desc.locator('.md-block[data-line="5"]').click();
+  await expect(page.locator('.pd-editor')).toHaveCount(1);
+  await expect(page.locator('.pd-editor')).toHaveAttribute('data-line', '5');
+
+  const previewTab = page.locator('.pd-editor .editor-tabs button', { hasText: 'Preview' });
+  const separatorIsAccent = () => previewTab.evaluate((button) => {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--accent)';
+    button.parentElement.appendChild(probe);
+    const matches = getComputedStyle(button).borderLeftColor === getComputedStyle(probe).color;
+    probe.remove();
+    return matches;
+  });
+  expect(await separatorIsAccent()).toBe(true);
+  await previewTab.click();
+  expect(await separatorIsAccent()).toBe(true);
+
+  await desc.locator('.md-block[data-line="8"]').click();
+  await expect(page.locator('.pd-editor')).toHaveCount(1);
+  await expect(page.locator('.pd-editor')).toHaveAttribute('data-line', '8');
+  await page.locator('#files h2').click();
+  await expect(page.locator('.pd-editor')).toHaveCount(0);
+
+  await desc.locator('.md-block[data-line="8"]').click();
+  await page.locator('.pd-editor textarea').fill('keep this draft');
+  await page.locator('#files h2').click();
+  await expect(page.locator('.pd-editor')).toHaveCount(1);
+  await page.locator('.pd-editor button', { hasText: 'Cancel' }).click();
+});
+
 test('Preview/Diff expands a collapsed markdown file', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const md = page.locator('#files-full details.file').filter({ has: page.locator('.md-seg') }).first();

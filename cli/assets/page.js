@@ -670,6 +670,19 @@
   function closeEditors() {
     document.querySelectorAll('.pd-editor').forEach((el) => closeEditor(el));
   }
+  function sameAnchor(editor, anchor) {
+    return anchor && editor.dataset.file === anchor.file && editor.dataset.side === anchor.side &&
+      editor.dataset.line === String(anchor.line);
+  }
+  function closeEmptyNewEditors(exceptAnchor) {
+    document.querySelectorAll('.pd-editor:not([data-editing])').forEach((editor) => {
+      const textarea = editor.querySelector('textarea');
+      if (!textarea || textarea.value.trim() || sameAnchor(editor, exceptAnchor)) return;
+      const anchor = { file: editor.dataset.file, side: editor.dataset.side, line: editor.dataset.line };
+      clearDraft(anchor, null);
+      closeEditor(editor);
+    });
+  }
   function findEditor(anchor, editingId) {
     return Array.prototype.find.call(document.querySelectorAll('.pd-editor'), (el) =>
       el.dataset.file === anchor.file && el.dataset.side === anchor.side &&
@@ -888,8 +901,14 @@
     const gbtn = ev.target.closest('.gutter-btn');
     const row = ev.target.closest('tr.commentable');
     const blockEl = ev.target.closest('.md-block');
-    if (!gbtn && !row && !blockEl) return;
-    if (!gbtn && ev.target.closest('button, a, input, textarea, .comment-card, .pd-editor')) return;
+    if (!gbtn && !row && !blockEl) {
+      if (!ev.target.closest('.pd-editor')) closeEmptyNewEditors(null);
+      return;
+    }
+    if (!gbtn && ev.target.closest('button, a, input, textarea, .comment-card, .pd-editor')) {
+      closeEmptyNewEditors(null);
+      return;
+    }
     ev.preventDefault();
     ev.stopPropagation();
     const source = gbtn || row || blockEl;
@@ -899,6 +918,7 @@
       line: source.dataset.line,
     };
     if (!anchor.file) return;
+    closeEmptyNewEditors(anchor);
     if (source.closest('#files-range')) {
       showToast('The range view is read-only — comments attach to the full diff. Click “Show full diff” to comment.');
       return;
