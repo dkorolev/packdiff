@@ -41,6 +41,32 @@ pub fn to_html_blocks(text: &str) -> Vec<(usize, String)> {
   out
 }
 
+/// Like [`to_html_blocks`], but splits every list item into its own rendered
+/// block. Review pages use this form so every bullet is an independently
+/// commentable source line; nested items carry a safe numeric indentation
+/// token that the page turns back into their visual nesting.
+pub fn to_html_review_blocks(text: &str) -> Vec<(usize, String)> {
+  let lines: Vec<&str> = text.lines().collect();
+  let mut out = Vec::new();
+  let mut i = 0;
+  while i < lines.len() {
+    if lines[i].trim_start().is_empty() {
+      i += 1;
+      continue;
+    }
+    if list_item(lines[i]).is_some() {
+      let (next, items) = list_review_blocks(&lines, i, 0);
+      out.extend(items);
+      i = next;
+    } else {
+      let (next, html) = one_block(&lines, i, 0);
+      out.push((i, html));
+      i = next;
+    }
+  }
+  out
+}
+
 /// Recursion cap for nested blockquotes and nested inline emphasis; markdown
 /// past this depth renders as escaped literal text instead of overflowing.
 const MAX_DEPTH: u32 = 8;
@@ -221,6 +247,47 @@ fn list_block(lines: &[&str], start: usize, depth: u32) -> (usize, String) {
   (i, out)
 }
 
+/// Render one HTML list per source item. Repeated list containers are
+/// deliberate: the page wraps each result in a separate comment target.
+fn list_review_blocks(lines: &[&str], start: usize, depth: u32) -> (usize, Vec<(usize, String)>) {
+  let (base_indent, _, _) = list_item(lines[start]).expect("review list starts on a recognized list item");
+  let mut out = Vec::new();
+  let mut i = start;
+  let mut indents = vec![base_indent];
+  while i < lines.len() {
+    let Some((indent, item_kind, item)) = list_item(lines[i]) else { break };
+    if indent < base_indent {
+      break;
+    }
+    while indents.last().is_some_and(|current| *current > indent) {
+      indents.pop();
+    }
+    if indents.last().is_none_or(|current| *current < indent) {
+      indents.push(indent);
+    }
+    let nesting = indents.len() - 1;
+    let (tag, start_attr) = match item_kind {
+      ListKind::Unordered => ("ul", String::new()),
+      ListKind::Ordered => {
+        let trimmed = lines[i].trim_start_matches([' ', '\t']);
+        let digits = trimmed.bytes().take_while(|byte| byte.is_ascii_digit()).count();
+        let ordinal = trimmed[..digits].parse::<usize>().unwrap_or(1);
+        ("ol", format!(r#" start="{ordinal}""#))
+      }
+    };
+    let offset = nesting * 2;
+    out.push((
+      i,
+      format!(
+        r#"<{tag} class="md-list-fragment" style="--md-list-offset:{offset}em"{start_attr}><li>{}</li></{tag}>"#,
+        inline(item, depth + nesting as u32)
+      ),
+    ));
+    i += 1;
+  }
+  (i, out)
+}
+
 /// Emphasis content must be non-empty and not whitespace-flanked, so a bare
 /// asterisk in prose (`a * b`) stays literal.
 fn emphasizable(inner: &str) -> bool {
@@ -374,6 +441,17 @@ mod tests {
     assert_eq!(lines, vec![0, 2, 5, 8, 14]);
     assert!(blocks[0].1.starts_with("<h1>"), "{}", blocks[0].1);
     assert!(blocks[3].1.starts_with("<pre>"), "{}", blocks[3].1);
+  }
+
+  #[test]
+  fn review_blocks_give_every_list_item_its_source_line() {
+    let blocks = to_html_review_blocks("# Title\n\n- parent\n  - child\n- sibling\n\n1. first\n2. second");
+    let lines: Vec<usize> = blocks.iter().map(|(line, _)| *line).collect();
+    assert_eq!(lines, vec![0, 2, 3, 4, 6, 7]);
+    assert_eq!(blocks[1].1, r#"<ul class="md-list-fragment" style="--md-list-offset:0em"><li>parent</li></ul>"#);
+    assert_eq!(blocks[2].1, r#"<ul class="md-list-fragment" style="--md-list-offset:2em"><li>child</li></ul>"#);
+    assert!(blocks[4].1.starts_with(r#"<ol class="md-list-fragment" style="--md-list-offset:0em" start="1">"#));
+    assert!(blocks[5].1.starts_with(r#"<ol class="md-list-fragment" style="--md-list-offset:0em" start="2">"#));
   }
 
   #[test]

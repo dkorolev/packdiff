@@ -21,7 +21,7 @@ Please follow the shared [engineering principles](https://github.com/dkorolev/pr
 
 - Keep the modern `+` comment gutter, but make the entire valid diff line a comment target.
 - Wrap long lines by default. Make `Wrap | Scroll` a persistent per-file choice.
-- Use the same persistent `Rendered | Source` choice for Markdown files and the Description section.
+- Use the same persistent `Markdown | Source` choice for Markdown files and the Description section.
 - File headers remain one stable row. Keep path, stats, Viewed, comment/draft counts, and relevant view controls; omit previous/next arrows.
 - Files and top-level sections start expanded. Persist explicit collapse state. A collapsed file with review data shows comment and draft counts.
 - Reopen persisted drafts visibly at their original anchors.

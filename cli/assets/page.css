@@ -1038,6 +1038,10 @@ tr.comment-row td, tr.editor-row td {
 .md-preview li > ul, .md-preview li > ol,
 .comment-body li > ul, .comment-body li > ol,
 .editor-preview li > ul, .editor-preview li > ol { margin: 2px 0; }
+.md-block > .md-list-fragment {
+  margin-block: 0;
+  padding-inline-start: calc(2em + var(--md-list-offset, 0em));
+}
 .md-preview h1, .md-preview h2 { border-bottom: 1px solid var(--border); padding-bottom: 4px; }
 .md-preview p, .comment-body p, .editor-preview p { margin: 6px 0; }
 
