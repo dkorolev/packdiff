@@ -527,9 +527,8 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <span class="verdict-actions" role="group" aria-label="Review outcome"><button type="button" id="verdict-comment" aria-pressed="true" title="Leave comments without submitting a verdict">Comment</button><button type="button" id="verdict-approve" aria-pressed="false" title="Approve the whole change">Approve</button><button type="button" id="verdict-changes" aria-pressed="false" title="Submit a review requiring changes">Require changes</button></span>
 <button type="button" id="view-toggle" disabled aria-pressed="false" title="Not enough horizontal space to render side-by-side">Side-by-side</button>
 <button type="button" id="comment-count" class="review-summary" hidden>0 comments</button>
-<a id="change-count" class="chrome-link" href="#activity" hidden>0 changes</a>
 <button type="button" id="undo-change" disabled>Undo</button>
-<details class="menu" id="actions-menu">
+<div class="actions-control"><details class="menu" id="actions-menu">
 <summary aria-label="Review actions">Actions</summary>
 <div class="menu-panel" role="menu">
 <h3>Copy / import review</h3>
@@ -542,9 +541,9 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <span class="menu-label">Theme</span>
 <span class="seg theme-seg" role="group" aria-label="Theme"><button type="button" id="theme-system">System</button><button type="button" id="theme-light">Light</button><button type="button" id="theme-dark">Dark</button></span>
 <button type="button" id="help-open" role="menuitem">Keyboard shortcuts (?)</button>
-<div class="shortcut-note"><kbd>j</kbd>/<kbd>k</kbd> files · <kbd>n</kbd>/<kbd>p</kbd> comments · <kbd>?</kbd> help</div>
+<div class="shortcut-note"><div><span><kbd>j</kbd> / <kbd>k</kbd></span><span>files</span></div><div><span><kbd>n</kbd> / <kbd>p</kbd></span><span>comments</span></div><div><span><kbd>?</kbd></span><span>help</span></div></div>
 </div>
-</details>
+</details><a id="change-count" href="#changes" hidden aria-label="0 review changes">0</a></div>
 </nav>
 <div id="alerts">
 <div id="storage-warning" class="alert" hidden role="alert">localStorage unavailable — comments last only for this page view; export before closing.</div>
@@ -581,7 +580,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   page.push_str(&files_html);
   page.push_str("</div><div id=\"files-range\" hidden></div>");
   page.push_str("</section>\n");
-  page.push_str("<section id=\"activity\"><h2>Activity</h2><div id=\"activity-body\" class=\"muted\">No review changes yet.</div></section>\n</main>\n");
+  page.push_str("<section id=\"changes\"><h2>Changes</h2><div id=\"changes-body\" class=\"muted\">No review changes yet.</div></section>\n</main>\n");
 
   // Keyboard help
   page.push_str(

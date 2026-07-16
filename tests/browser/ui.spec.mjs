@@ -199,6 +199,11 @@ test('comment gutter creates, edits, and deletes a comment', async ({ page }) =>
   await page.locator('.pd-editor button.primary').click();
   await expect(page.locator('.comment-card').first()).toBeVisible();
   await expect(page.locator('#comment-count')).toContainText('1 comment');
+  await expect(page.locator('.comment-meta time').first()).not.toContainText('T');
+  await expect(page.locator('#changes-body a', { hasText: 'Comment added' })).toBeVisible();
+  await expect(page.locator('#changes-body time')).not.toContainText('T');
+  await page.locator('#changes-body a', { hasText: 'Comment added' }).click();
+  await expect(page.locator('.comment-card').first()).toBeFocused();
   // The global count navigates directly to inline review data; no drawer.
   await page.locator('#comment-count').click();
   await expect(page.locator('.comment-card').first()).toBeFocused();
@@ -256,11 +261,16 @@ test('review outcome contributes at most one final action', async ({ page }) => 
   // Comment is the default no-verdict outcome and is not an action.
   await expect(page.locator('#verdict-comment')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#change-count')).toBeHidden();
+  const actionsWidth = await page.locator('.actions-control').evaluate((el) => el.getBoundingClientRect().width);
 
   // A submitted verdict contributes exactly one final action.
   await page.locator('#verdict-changes').click();
   await expect(page.locator('#verdict-changes')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('#change-count')).toHaveText('1 change');
+  await expect(page.locator('#change-count')).toHaveText('1');
+  expect(await page.locator('.actions-control').evaluate((el) => el.getBoundingClientRect().width)).toBe(actionsWidth);
+  await page.locator('#change-count').click();
+  await expect(page).toHaveURL(/#changes$/);
+  await expect(page.locator('#changes h2')).toHaveText('Changes');
   await expect(page.locator('#undo-change')).toBeEnabled();
   await page.reload();
   await page.waitForFunction(() => {
@@ -271,7 +281,7 @@ test('review outcome contributes at most one final action', async ({ page }) => 
   await page.locator('#verdict-approve').click();
   await expect(page.locator('#verdict-approve')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#verdict-changes')).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.locator('#change-count')).toHaveText('1 change');
+  await expect(page.locator('#change-count')).toHaveText('1');
 
   // Undo removes that one final verdict and returns to Comment.
   await page.locator('#undo-change').click();
@@ -295,8 +305,9 @@ test('review outcome contributes at most one final action', async ({ page }) => 
   });
   await page.reload();
   await page.waitForFunction(() => document.getElementById('verdict-approve'));
-  await expect(page.locator('#change-count')).toHaveText('1 change');
-  await expect(page.locator('#activity-body')).toContainText('Change approved');
+  await expect(page.locator('#change-count')).toHaveText('1');
+  await expect(page.locator('#changes-body')).toContainText('Change approved');
+  await expect(page.locator('#changes-body time')).not.toContainText('T');
 
   // Review outcomes are independent action buttons, not a segmented
   // presentation-mode control such as Unified / Side-by-side.
