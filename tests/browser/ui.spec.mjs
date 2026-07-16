@@ -77,7 +77,7 @@ function makeFixture() {
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-qm', 'feature two']);
 
-  // Notes commit: lifts into the Description panel (Preview | Raw).
+  // Notes commit: lifts into the Description panel (Markdown | Source).
   write(repo, 'PR-DESCRIPTION.md',
     '# Fixture PR\n\nA short description body.\n\n- Parent item\n  - Child item\n    - Grandchild item\n- Sibling item\n');
   git(repo, ['add', '-A']);
@@ -370,9 +370,10 @@ test('short hunk gaps stay visible while three-line gaps collapse', async ({ pag
   }
 });
 
-test('Preview/Diff pill switches without losing the panel', async ({ page }) => {
+test('Markdown/Source pill switches without losing the panel', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const md = page.locator('#files-full details.file').filter({ has: page.locator('.md-seg') }).first();
+  await expect(md.locator('.md-seg button')).toHaveText(['Markdown', 'Source']);
   await expect(md.locator('.md-preview')).toBeVisible();
   await md.locator('.md-seg button[data-mdview="diff"]').click();
   await expect(md.locator('.diff-wrap')).toBeVisible();
@@ -380,15 +381,23 @@ test('Preview/Diff pill switches without losing the panel', async ({ page }) => 
   await expect(md.locator('.md-preview')).toBeVisible();
 });
 
-test('Description Preview/Raw toggles rendered and source views', async ({ page }) => {
+test('Description Markdown/Source toggles rendered and source views', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const desc = page.locator('#description');
   await expect(desc).toBeVisible();
   await expect(desc.locator('.md-preview')).toBeVisible();
+  await expect(desc.locator('.desc-seg button')).toHaveText(['Markdown', 'Source']);
   await expect(desc.locator('h1')).toContainText('Fixture PR');
-  await expect(desc.locator('.md-preview ul ul ul')).toHaveCount(1);
-  expect(await desc.locator('.md-preview ul ul').first().evaluate((el) =>
-    parseFloat(getComputedStyle(el).paddingInlineStart))).toBeGreaterThan(0);
+  await expect(desc.locator('.md-preview .md-list-fragment')).toHaveCount(4);
+  await expect(desc.locator('.md-block[data-line="5"]')).toContainText('Parent item');
+  await expect(desc.locator('.md-block[data-line="6"]')).toContainText('Child item');
+  await expect(desc.locator('.md-block[data-line="7"]')).toContainText('Grandchild item');
+  await expect(desc.locator('.md-block[data-line="8"]')).toContainText('Sibling item');
+  const listIndents = await desc.locator('.md-list-fragment').evaluateAll((lists) =>
+    lists.map((list) => parseFloat(getComputedStyle(list).paddingInlineStart)));
+  expect(listIndents[1]).toBeGreaterThan(listIndents[0]);
+  expect(listIndents[2]).toBeGreaterThan(listIndents[1]);
+  expect(listIndents[3]).toBe(listIndents[0]);
   await desc.locator('.desc-seg button[data-mdview="raw"]').click();
   await expect(desc.locator('.desc-raw')).toBeVisible();
   await expect(desc.locator('.md-preview')).toBeHidden();

@@ -150,10 +150,10 @@ fn status_letter(status: FileStatus) -> &'static str {
 /// that straddle a change boundary render as separate blocks — inherent to
 /// rendering a diff, not a bug.
 ///
-/// Every rendered top-level block carries the comment anchor of the source
-/// line it starts at (context and added lines anchor to the `New` side,
-/// removed lines to `Old`), so commenting works in the preview too — the
-/// same `(file, side, line)` coordinates as the diff table rows.
+/// Every rendered block carries the comment anchor of the source line it
+/// starts at, with every list item split into its own review block.
+/// Context and added lines anchor to the `New` side and removed lines to the
+/// `Old` side: the same `(file, side, line)` coordinates as the diff table.
 fn render_markdown_preview(f: &FileDiff) -> String {
   #[derive(PartialEq, Clone, Copy)]
   enum Run {
@@ -182,7 +182,7 @@ fn render_markdown_preview(f: &FileDiff) -> String {
     }
     for (kind, lines) in runs {
       let text: Vec<&str> = lines.iter().map(|(_, t)| *t).collect();
-      let blocks = markdown::to_html_blocks(&text.join("\n"));
+      let blocks = markdown::to_html_review_blocks(&text.join("\n"));
       if blocks.is_empty() {
         continue;
       }
@@ -213,20 +213,20 @@ fn render_markdown_preview(f: &FileDiff) -> String {
   format!(r#"<div class="md-preview">{note}{}</div>"#, chunks.join(""))
 }
 
-/// The lifted PR description as a page panel: rendered markdown whose
-/// top-level blocks carry comment anchors — `(path, New, 1-based line)` —
-/// exactly like the file previews, so the page JS needs nothing new for
-/// commenting here. A "fake file": not part of the reviewed diff, and shown
+/// The lifted PR description as a page panel: rendered markdown whose blocks
+/// (including individual list items at every nesting level) carry comment anchors —
+/// `(path, New, 1-based line)` — exactly like the file previews. A "fake
+/// file": not part of the reviewed diff, and shown
 /// with NO provenance chrome — no file name, no notes author. It is simply
 /// there, the way the pull request will present it; the path exists only
 /// inside the comment anchors.
 ///
-/// A Preview | Raw pill switches between the rendered card and a line-numbered
+/// A Markdown | Source pill switches between the rendered card and a line-numbered
 /// source view (same anchors), so reviewers can quote exact markdown syntax.
 fn render_description(d: &packdiff_dto::diff::NotesFile) -> String {
   let anchor = esc(&d.path);
   let mut blocks = String::new();
-  for (offset, html) in markdown::to_html_blocks(&d.text) {
+  for (offset, html) in markdown::to_html_review_blocks(&d.text) {
     let line = offset + 1;
     blocks.push_str(&format!(
       r#"<div class="md-block-wrap"><div class="md-gutter"><button type="button" class="gutter-btn" aria-label="Add comment on line {line}" data-file="{anchor}" data-side="New" data-line="{line}">+</button></div><div class="md-block" data-file="{anchor}" data-side="New" data-line="{line}">{html}</div></div>"#,
@@ -303,7 +303,7 @@ fn render_file(index: usize, f: &FileDiff, endpoint_lines: Option<(usize, usize)
   let renderable_markdown =
     is_markdown_path(f.anchor_path()) && !f.binary && f.status != FileStatus::Deleted && !f.hunks.is_empty();
   let toggle = if renderable_markdown {
-    r#"<span class="seg md-seg" role="group" aria-label="Markdown view"><button type="button" data-mdview="preview" class="active" aria-pressed="true">Rendered</button><button type="button" data-mdview="diff" aria-pressed="false">Source</button></span>"#
+    r#"<span class="seg md-seg" role="group" aria-label="Markdown view"><button type="button" data-mdview="preview" class="active" aria-pressed="true">Markdown</button><button type="button" data-mdview="diff" aria-pressed="false">Source</button></span>"#
   } else {
     ""
   };
@@ -563,7 +563,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   page.push_str(&summary_html);
   if let Some(d) = &doc.description {
     page.push_str(
-      r#"<section id="description"><h2 class="desc-heading">Description <span class="seg md-seg desc-seg" role="group" aria-label="Description view"><button type="button" data-mdview="preview" class="active" aria-pressed="true">Rendered</button><button type="button" data-mdview="raw" aria-pressed="false">Source</button></span></h2>"#,
+      r#"<section id="description"><h2 class="desc-heading">Description <span class="seg md-seg desc-seg" role="group" aria-label="Description view"><button type="button" data-mdview="preview" class="active" aria-pressed="true">Markdown</button><button type="button" data-mdview="raw" aria-pressed="false">Source</button></span></h2>"#,
     );
     page.push_str(&render_description(d));
     page.push_str("</section>\n");

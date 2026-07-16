@@ -139,7 +139,7 @@ fn end_to_end() {
   assert!(html.contains("Binary file — contents not shown."));
   assert!(html.contains("feature change one"));
   // Exactly one markdown file in the fixture (newfile.md) → exactly one
-  // Preview | Diff pill and one server-rendered preview. Preview is the
+  // Markdown | Source pill and one server-rendered preview. Markdown is the
   // default: the markdown file's preview starts visible and its diff wrap
   // starts hidden — and it is the only hidden wrap on the page.
   assert_eq!(html.matches(r#"class="seg md-seg""#).count(), 1);
@@ -147,6 +147,7 @@ fn end_to_end() {
   assert!(!html.contains(r#"<div class="md-preview" hidden>"#));
   assert_eq!(html.matches(r#"<div class="diff-wrap" hidden>"#).count(), 1);
   assert!(html.contains(r#"data-mdview="preview" class="active""#));
+  assert!(html.contains(">Markdown</button><button type=\"button\" data-mdview=\"diff\""));
   assert!(html.contains("<h1>New</h1>"), "the markdown preview is rendered at build time");
   assert!(html.contains(r#"class="md-run md-run-add""#), "added markdown renders tinted green");
   // Commit range filtering: snapshots embedded, commits selectable, one copy
@@ -529,9 +530,10 @@ fn notes_commits_lift_into_the_description_panel() {
   assert!(html.contains(r##"href="#description""##));
   assert!(html.contains(r#"data-file="PR-DESCRIPTION.md" data-side="New" data-line="1""#));
   assert!(html.contains("<h1>Add evil</h1>"), "the description renders at build time");
-  // Preview | Raw: rendered card by default, source table hidden until toggled.
+  // Markdown | Source: rendered card by default, source table hidden until toggled.
   assert!(html.contains(r#"class="seg md-seg desc-seg""#));
   assert!(html.contains(r#"data-mdview="raw""#));
+  assert!(html.contains(">Markdown</button><button type=\"button\" data-mdview=\"raw\""));
   assert!(html.contains(r#"class="desc-raw" hidden"#));
   assert!(html.contains(r#"class="diff unified desc-source""#));
   assert!(html.contains("# Add evil"), "raw source carries the markdown text");
