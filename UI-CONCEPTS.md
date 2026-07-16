@@ -4,7 +4,7 @@ Please follow the shared [engineering principles](https://github.com/dkorolev/pr
 
 ## The review is a document
 
-- Present the review in a human-readable sequence: Summary, Description, Commits, Files changed, Diff, and, when implemented, Activity.
+- Present the review in a human-readable sequence: Summary, Description, Commits, Files changed, Diff, and Changes.
 - Keep the stable navigation row pinned at the very top from first paint. Put the plain-language review summary in a leftmost Summary section below it.
 - The Files changed section is the file index. Do not duplicate it with a permanent sidebar.
 - Details such as repository, refs, merge-base, generation time, tool version, and schema belong in disclosure within the Summary section.
@@ -42,17 +42,17 @@ Please follow the shared [engineering principles](https://github.com/dkorolev/pr
 - For now, the only outward transfer actions are `Copy as Markdown` and `Copy as JSON`, under Actions. Do not expose download or JSON-import flows.
 - Default to the system theme. Put a compact `System | Light | Dark` chooser one click away under Actions.
 
-## Review changes, local state, and Activity
+## Review changes, local state, and Changes
 
 - Keep two durable tiers in the data model:
   - **Review changes** are material, auditable, reversible, and eventually pushable: comments and their resolution, the final review verdict, Viewed status, deletion/restoration, and future shared events.
   - **Local state** is durable comfort and recovery data: drafts, wrapping, Markdown presentation, collapse state, theme, and similar preferences.
 - Review state mimics GitHub (decision 2026-07-13): the entire change carries one verdict — Approved or ChangesRequired — and individual comments are resolvable. There is no per-comment kind taxonomy.
-- Review submission has three choices: Comment (no verdict action), Approve, or Require changes. Approve and Require changes contribute exactly one final Activity action; switching between them replaces that action, while returning to Comment removes it.
-- Reserve a stable pinned-row status for the number of Review changes and Undo. Clicking the count eventually navigates to a real Activity section, not a drawer.
-- Activity should minimally but visibly distinguish Review changes from Local state. Its detailed UX is not designed yet.
+- Review submission has three choices: Comment (no verdict action), Approve, or Require changes. Approve and Require changes contribute exactly one final Changes entry; switching between them replaces that entry, while returning to Comment removes it.
+- Reserve stable pinned-row space for the number of Review changes on the Actions control and for Undo. The count navigates to the in-document Changes section, not a drawer.
+- Changes entries use human-readable local timestamps. Entries that still have a visible destination, such as a current comment, navigate directly back to it.
 - Model material changes as stable-ID journal operations rather than whole document replacement. Keep the schema compatible with deterministic, CRDT-style merging of future new comments and commits; do not implement sync yet.
-- Confirm data-sensitive mutations inline and maintain a persistent per-diff undo ledger. Draft keystrokes are local checkpoints, not material Activity events.
+- Confirm data-sensitive mutations inline and maintain a persistent per-diff undo ledger. Draft keystrokes are local checkpoints, not material Changes entries.
 
 ## Navigation behavior
 
@@ -69,5 +69,5 @@ Please follow the shared [engineering principles](https://github.com/dkorolev/pr
 
 ## Deferred deliberately
 
-- The final Activity UI, upstream synchronization, CRDT merging, file filters, next-unviewed navigation, repository-authored collapsed-first defaults, and rich commit metadata placement remain TODOs.
+- Upstream synchronization, CRDT merging, file filters, next-unviewed navigation, repository-authored collapsed-first defaults, and rich commit metadata placement remain TODOs.
 - If filtering is added, it must execute instantly in the local JavaScript/WASM player. There is no filtering UI in the current packdiff scope.

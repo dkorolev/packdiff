@@ -110,6 +110,8 @@
   // In-document navigation replaces the current URL instead of adding a
   // history entry: Back always leaves the review. Browser-tested in
   // "Back control returns to the page that opened the review".
+  let explicitNavigationId = null;
+  let explicitNavigationTimer = 0;
   document.addEventListener('click', (ev) => {
     const link = ev.target.closest('a[href^="#"]');
     if (!link) return;
@@ -121,6 +123,9 @@
     target.scrollIntoView({ block: 'start' });
     target.setAttribute('tabindex', '-1');
     target.focus({ preventScroll: true });
+    explicitNavigationId = id;
+    clearTimeout(explicitNavigationTimer);
+    explicitNavigationTimer = setTimeout(() => { explicitNavigationId = null; }, 400);
     history.replaceState(null, '', '#' + id);
   });
 
@@ -304,7 +309,7 @@
     }
     updateCount();
     syncViewedChecks();
-    renderActivity();
+    renderChanges();
   }
   function saveDoc(next) {
     persist(next);
@@ -470,24 +475,68 @@
     syncViewedChecks();
   }
 
-  function renderActivity() {
+  function formatTimestamp(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value || '';
+    try {
+      return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+    } catch (e) {
+      return date.toLocaleString();
+    }
+  }
+
+  function focusCommentById(id) {
+    const card = Array.prototype.find.call(document.querySelectorAll('.comment-card'),
+      (el) => el.dataset.commentId === id) || null;
+    if (!card) { showToast('That comment is no longer present'); return; }
+    const file = card.closest('details.file');
+    if (file) file.open = true;
+    card.scrollIntoView({ block: 'center' });
+    card.setAttribute('tabindex', '-1');
+    card.focus({ preventScroll: true });
+    card.classList.add('arrival-flash');
+    setTimeout(() => card.classList.remove('arrival-flash'), 950);
+    if (file && file.id) history.replaceState(null, '', '#' + file.id);
+  }
+
+  function renderChanges() {
     const count = document.getElementById('change-count');
     const undo = document.getElementById('undo-change');
-    const body = document.getElementById('activity-body');
+    const body = document.getElementById('changes-body');
     const entries = activity;
     if (count) {
       count.hidden = entries.length === 0;
-      count.textContent = entries.length + ' change' + (entries.length === 1 ? '' : 's');
+      count.textContent = String(entries.length);
+      count.setAttribute('aria-label', entries.length + ' review change' + (entries.length === 1 ? '' : 's'));
     }
     if (undo) undo.disabled = entries.length === 0;
     if (!body) return;
     body.textContent = '';
     if (!entries.length) { body.textContent = 'No review changes yet.'; return; }
     const list = document.createElement('ol');
-    list.className = 'activity-list';
+    list.className = 'change-list';
     entries.slice().reverse().forEach((entry) => {
       const item = document.createElement('li');
-      item.textContent = entry.label + ' · ' + entry.at;
+      const commentId = entry.comment_id || (entry.comment && entry.comment.id);
+      const currentComment = commentId && doc.comments.some((comment) => comment.id === commentId);
+      if (currentComment) {
+        const link = document.createElement('a');
+        link.href = '#changes';
+        link.textContent = entry.label;
+        link.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          focusCommentById(commentId);
+        });
+        item.appendChild(link);
+      } else {
+        item.appendChild(document.createTextNode(entry.label));
+      }
+      const time = document.createElement('time');
+      time.dateTime = entry.at;
+      time.title = entry.at;
+      time.textContent = formatTimestamp(entry.at);
+      item.appendChild(time);
       list.appendChild(item);
     });
     body.appendChild(list);
@@ -519,7 +568,7 @@
     }
     saveActivity();
     renderVerdict();
-    renderAll(); renderActivity();
+    renderAll(); renderChanges();
     showToast('Last review change undone');
   });
 
@@ -564,8 +613,20 @@
     wrap.dataset.commentId = c.id;
     const meta = document.createElement('div');
     meta.className = 'comment-meta';
-    meta.textContent = c.file + ' · ' + c.side.toLowerCase() + ' line ' + c.line + ' · ' + c.updated_at +
-      (c.resolved_at ? ' · resolved ' + c.resolved_at : '');
+    meta.appendChild(document.createTextNode(c.file + ' · ' + c.side.toLowerCase() + ' line ' + c.line + ' · '));
+    const updated = document.createElement('time');
+    updated.dateTime = c.updated_at;
+    updated.title = c.updated_at;
+    updated.textContent = formatTimestamp(c.updated_at);
+    meta.appendChild(updated);
+    if (c.resolved_at) {
+      meta.appendChild(document.createTextNode(' · resolved '));
+      const resolved = document.createElement('time');
+      resolved.dateTime = c.resolved_at;
+      resolved.title = c.resolved_at;
+      resolved.textContent = formatTimestamp(c.resolved_at);
+      meta.appendChild(resolved);
+    }
     const body = document.createElement('div');
     body.className = 'comment-body';
     try { body.innerHTML = callWasm('pd_markdown_html', c.text); }
@@ -932,7 +993,7 @@
     }
   });
 
-  // Preview | Diff (markdown files) and Preview | Raw (description panel).
+  // Markdown | Source for both markdown files and the description panel.
   // On file panels the pill lives inside <summary>: expand the panel and
   // stop the default <details> toggle dance.
   document.addEventListener('click', (ev) => {
@@ -980,7 +1041,7 @@
     pushActivity({ kind: 'viewed', label: cb.checked ? 'File marked viewed' : 'File marked unviewed', anchor: anchor, viewed: cb.checked });
     savePrefs();
     syncViewedChecks();
-    renderActivity();
+    renderChanges();
   });
   document.addEventListener('toggle', (ev) => {
     const file = ev.target.closest && ev.target.closest('details.file');
@@ -1909,7 +1970,7 @@
       renderCurrentFile(current);
       // The document-section tabs follow passive scrolling as well as
       // explicit anchor navigation. Other chrome links are not scroll-spy tabs.
-      const links = document.querySelectorAll('#topnav a.section-link');
+      const links = document.querySelectorAll('#topnav a.section-link, #change-count');
       const sections = Array.prototype.map.call(links, (a) => {
         const id = a.getAttribute('href').slice(1);
         return { a: a, sec: document.getElementById(id) };
@@ -1919,14 +1980,16 @@
         for (const s of sections) {
           if (s.sec.getBoundingClientRect().top <= top + 4) cur = s;
         }
+        const passiveId = current && cur.sec.id === 'diff' ? current.id : cur.sec.id;
+        const locationId = explicitNavigationId || passiveId;
+        const activeSectionId = locationId && locationId.indexOf('file-') === 0 ? 'diff' : locationId;
         for (const s of sections) {
-          const active = s === cur;
+          const active = s.sec.id === activeSectionId;
           s.a.classList.toggle('active', active);
           if (active) s.a.setAttribute('aria-current', 'location');
           else s.a.removeAttribute('aria-current');
         }
-        const passiveId = current && cur.sec.id === 'diff' ? current.id : cur.sec.id;
-        if (passiveId && location.hash !== '#' + passiveId) history.replaceState(null, '', '#' + passiveId);
+        if (locationId && location.hash !== '#' + locationId) history.replaceState(null, '', '#' + locationId);
       }
     }
     window.addEventListener('scroll', () => {
@@ -2175,6 +2238,6 @@
     }
   });
   renderAll();
-  renderActivity();
+  renderChanges();
   restorePersistedDrafts();
 })();
