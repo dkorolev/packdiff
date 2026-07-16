@@ -737,6 +737,10 @@ details.file:not([open]) > summary.file-summary {
   font-weight: 600;
   border-color: transparent;
 }
+.seg button.active + button,
+.seg button[aria-pressed="true"] + button,
+.seg button + button.active,
+.seg button + button[aria-pressed="true"] { border-left-color: var(--accent); }
 .seg button:hover:not(.active):not([aria-pressed="true"]) { color: var(--fg); }
 .seg button:focus-visible { outline: none; }
 .seg:has(button:focus-visible) {
