@@ -51,6 +51,15 @@ pub struct DiffDocument {
   /// no notes commits.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub description: Option<NotesFile>,
+  /// Decisions journaled while the change was made, lifted out of the diff
+  /// by the same notes-commit convention as [`Self::description`]: notes
+  /// commits carrying `PR-DECISION-<topic>.md` record what was decided and
+  /// why, not code under review. Each is rendered as its own commentable
+  /// panel, ordered by path; their commits and files are excluded from
+  /// `commits` / `files`. Empty (and omitted from JSON) when the range
+  /// journals no decisions.
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub decisions: Vec<NotesFile>,
 }
 
 /// A notes file lifted out of the diff and presented as a page panel.
@@ -73,6 +82,7 @@ impl DiffDocument {
   pub fn new(
     repo: String, base: RefInfo, head: RefInfo, merge_base: String, generated_at: String, commits: Vec<Commit>,
     files: Vec<FileDiff>, snapshots: Option<crate::snapshot::RangeSnapshots>, description: Option<NotesFile>,
+    decisions: Vec<NotesFile>,
   ) -> Self {
     Self {
       schema_version: SCHEMA_VERSION,
@@ -86,6 +96,7 @@ impl DiffDocument {
       files,
       snapshots,
       description,
+      decisions,
     }
   }
 
@@ -509,6 +520,11 @@ Binary files a/blob.bin and b/blob.bin differ
         text: "# Title\n\nBody.".into(),
         commits: vec!["d".repeat(40)],
       }),
+      vec![NotesFile {
+        path: "PR-DECISION-retry-safety.md".into(),
+        text: "# Retry safety\n\nOnly unprocessed requests retry.".into(),
+        commits: vec!["d".repeat(40)],
+      }],
     );
     let json = serde_json::to_string(&doc).unwrap();
     let back: DiffDocument = serde_json::from_str(&json).unwrap();
@@ -516,7 +532,11 @@ Binary files a/blob.bin and b/blob.bin differ
     assert_eq!(back.files.len(), 5);
     assert_eq!(back.additions(), doc.additions());
     assert_eq!(back.description.unwrap().path, "PR-DESCRIPTION.md");
-    // Absent description stays absent from the JSON, not `null`.
+    assert_eq!(back.decisions.len(), 1);
+    assert_eq!(back.decisions[0].path, "PR-DECISION-retry-safety.md");
+    // Absent notes stay absent from the JSON, not `null` / `[]` — a document
+    // that journals nothing is byte-identical to one from before decisions
+    // existed, which is why this addition needs no schema bump.
     let none = DiffDocument::new(
       "repo".into(),
       RefInfo { name: "main".into(), sha: "a".repeat(40) },
@@ -527,7 +547,13 @@ Binary files a/blob.bin and b/blob.bin differ
       vec![],
       None,
       None,
+      Vec::new(),
     );
-    assert!(!serde_json::to_string(&none).unwrap().contains("description"));
+    let json = serde_json::to_string(&none).unwrap();
+    assert!(!json.contains("description"));
+    assert!(!json.contains("decisions"));
+    // A document written before decisions existed still reads.
+    let back: DiffDocument = serde_json::from_str(&json).unwrap();
+    assert!(back.decisions.is_empty());
   }
 }

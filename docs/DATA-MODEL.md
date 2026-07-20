@@ -101,6 +101,22 @@ Present when the range carries notes commits (the notes-commit convention — se
 
 Comments on the page's Description panel anchor to `path`, side `New`, 1-based lines of `text`.
 
+### `decisions` — the lifted journaled decisions
+
+The same notes-commit convention applied to `PR-DECISION-<topic>.md` files: decisions recorded while the change was made. Ordered by path, each with the identical `NotesFile` shape and anchoring rule as `description`, and likewise excluded from `files`, `commits`, and the snapshot boundaries. Omitted entirely when the range journals none — a document without decisions is byte-identical to one produced before they existed, which is why this addition carries no `schema_version` bump.
+
+```json
+{
+  "decisions": [
+    {
+      "path": "PR-DECISION-retry-safety.md",
+      "text": "# Retry safety\n\n…full markdown…",
+      "commits": ["<40-hex>"]
+    }
+  ]
+}
+```
+
 ## `ReviewDocument`
 
 The mutable review state. Lives in the browser's localStorage; every mutation goes through the model (via WASM in the browser). This is also the **Export JSON / Import JSON** format.

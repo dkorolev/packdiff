@@ -479,6 +479,79 @@ fn default_output_filename() {
 }
 
 #[test]
+fn notes_commits_lift_journaled_decisions_into_their_own_panels() {
+  if !git_available() {
+    eprintln!("SKIP: git not found on PATH");
+    return;
+  }
+  let tmp = tmpdir("decisions");
+  let repo = tmp.join("sample");
+  make_repo(&repo);
+  git(&repo, &["checkout", "-q", "feature"]);
+  // One notes commit carrying the description AND a decision together, then a
+  // second decision on its own — both shapes are notes.
+  write(&repo, "PR-DESCRIPTION.md", b"# Add evil\n\nThis PR adds `evil()`.\n");
+  write(&repo, "PR-DECISION-retry-safety.md", b"# Retry safety\n\nOnly unprocessed requests retry.\n");
+  git(&repo, &["add", "-A"]);
+  git(&repo, &["-c", "user.email=notes-bot@example.com", "commit", "-qm", "pr notes"]);
+  write(&repo, "PR-DECISION-schema.md", b"# Schema\n\nAdditive field, so no bump.\n");
+  git(&repo, &["add", "-A"]);
+  git(&repo, &["-c", "user.email=notes-bot@example.com", "commit", "-qm", "decision: schema"]);
+  // A decision-shaped file NOT at the root, and one authored by a human: both
+  // are ordinary files under review, never lifted.
+  std::fs::create_dir_all(repo.join("docs")).unwrap();
+  write(&repo, "docs/PR-DECISION-nested.md", b"# Nested\n\nDocumentation, not notes.\n");
+  write(&repo, "PR-DECISION-human.md", b"# Human\n\nAuthored by a person.\n");
+  git(&repo, &["add", "-A"]);
+  git(&repo, &["commit", "-qm", "docs and a human decision"]);
+
+  let out = tmp.join("decisions.html");
+  let dump = tmp.join("decisions.json");
+  let output = Command::new(bin())
+    .env("PACKDIFF_SYSTEM_USER_EMAIL", "notes-bot@example.com")
+    .args([
+      "main",
+      "feature",
+      "-C",
+      repo.to_str().unwrap(),
+      "-o",
+      out.to_str().unwrap(),
+      "--dump-json",
+      dump.to_str().unwrap(),
+    ])
+    .output()
+    .unwrap();
+  assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+  let packed = &serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["Packed"];
+  assert_eq!(packed["description"], "PR-DESCRIPTION.md");
+  assert_eq!(
+    packed["decisions"],
+    serde_json::json!(["PR-DECISION-retry-safety.md", "PR-DECISION-schema.md"]),
+    "root decisions by the notes author lift, in path order"
+  );
+  assert_eq!(packed["notes_commits"].as_array().unwrap().len(), 2);
+
+  let typed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+  let decisions = typed["decisions"].as_array().unwrap();
+  assert_eq!(decisions.len(), 2);
+  assert!(decisions[0]["text"].as_str().unwrap().starts_with("# Retry safety"));
+  assert!(!serde_json::to_string(&typed["snapshots"]).unwrap().contains("PR-DECISION-retry-safety"));
+
+  let html = std::fs::read_to_string(&out).unwrap();
+  assert!(html.contains(r##"href="#decisions">Decisions</a>"##), "the nav offers the section");
+  assert!(html.contains(r#"data-anchor="PR-DECISION-retry-safety.md""#), "each decision is commentable");
+  assert!(html.contains("<h1>Retry safety</h1>"), "decisions render at build time");
+  assert!(!html.contains("decision: schema"), "the notes commit stays off the commits table");
+  assert!(!html.contains(">PR-DECISION-schema.md</a>"), "lifted decisions leave the Files changed index");
+  // The human-authored and nested look-alikes stay ordinary files under review.
+  assert!(html.contains(">PR-DECISION-human.md</a>"), "a human-authored decision file is code under review");
+  assert!(html.contains(">docs/PR-DECISION-nested.md</a>"), "a nested decision file is not a notes file");
+  assert_eq!(html.matches(r#"class="notes-panel decision""#).count(), 2, "exactly the two lifted decisions");
+
+  let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn notes_commits_lift_into_the_description_panel() {
   if !git_available() {
     eprintln!("SKIP: git not found on PATH");
@@ -526,8 +599,9 @@ fn notes_commits_lift_into_the_description_panel() {
   assert_eq!(packed["notes_commits"].as_array().unwrap().len(), 1);
 
   let html = std::fs::read_to_string(&out).unwrap();
-  assert!(html.contains(r#"<section id="description">"#));
+  assert!(html.contains(r#"<section id="description" class="notes-panel" data-anchor="PR-DESCRIPTION.md">"#));
   assert!(html.contains(r##"href="#description""##));
+  assert!(!html.contains(r#"id="decisions""#), "this range journals no decisions");
   assert!(html.contains(r#"data-file="PR-DESCRIPTION.md" data-side="New" data-line="1""#));
   assert!(html.contains("<h1>Add evil</h1>"), "the description renders at build time");
   // Markdown | Source: rendered card by default, source table hidden until toggled.
@@ -544,8 +618,9 @@ fn notes_commits_lift_into_the_description_panel() {
   // appears ONLY inside comment anchors, never as visible text.
   assert_eq!(
     html.matches("PR-DESCRIPTION").count(),
-    html.matches(r#"data-file="PR-DESCRIPTION.md""#).count(),
-    "the path must not appear outside data-file anchors"
+    html.matches(r#"data-file="PR-DESCRIPTION.md""#).count()
+      + html.matches(r#"data-anchor="PR-DESCRIPTION.md""#).count(),
+    "the path must not appear outside comment anchors"
   );
   assert!(!html.contains("notes author"), "the page never names the convention");
 
@@ -569,7 +644,7 @@ fn notes_commits_lift_into_the_description_panel() {
   assert_eq!(doc["Packed"]["files"], 7);
   assert!(doc["Packed"]["description"].is_null());
   let html = std::fs::read_to_string(&plain_out).unwrap();
-  assert!(!html.contains(r#"<section id="description">"#));
+  assert!(!html.contains(r#"id="description""#));
   assert!(html.contains("pr notes"));
 
   let _ = std::fs::remove_dir_all(&tmp);

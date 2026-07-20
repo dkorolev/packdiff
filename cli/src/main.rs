@@ -391,7 +391,15 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
           "deletions": doc.deletions(),
           "binary_files": doc.files.iter().filter(|f| f.binary).count(),
           "description": doc.description.as_ref().map(|d| &d.path),
-          "notes_commits": doc.description.as_ref().map(|d| d.commits.clone()).unwrap_or_default(),
+          "decisions": doc.decisions.iter().map(|d| &d.path).collect::<Vec<_>>(),
+          // Every lifted notes file records the same hidden commits, so any
+          // one of them answers "which commits were lifted off the page".
+          "notes_commits": doc
+            .description
+            .as_ref()
+            .or(doc.decisions.first())
+            .map(|d| d.commits.clone())
+            .unwrap_or_default(),
           "warnings": warnings,
         }
       });

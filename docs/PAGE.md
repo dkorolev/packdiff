@@ -4,11 +4,12 @@ The HTML file packdiff writes is the whole product: one file, no server, no netw
 
 ## Layout
 
-The review reads top to bottom as one document — summary first, then Description (when present), Commits, Files changed, Diff, Activity:
+The review reads top to bottom as one document — summary first, then Description and Decisions (when present), Commits, Files changed, Diff, Activity:
 
 - **Review summary** — a plain-language line (commit and file counts, `+/−` totals, how to comment) with a **Details** disclosure underneath (repository, refs with SHAs, merge-base, generation time, tool version, schema). Both scroll away.
-- **Pinned navigation** — the ONE row that stays: **← Back**, scroll-tracking section links, the current file's context while you scroll the diff (path breadcrumbs, `+/−`, comment count), the **Approve | Require changes** verdict, the **Side-by-side** toggle, the comment count (click steps to the next comment), the review-change count, **Undo**, and the **Actions** menu. **Description**, **Commits**, **Files changed**, and **Diff** are clickable tabs whose blue active state follows the visible section.
+- **Pinned navigation** — the ONE row that stays: **← Back**, scroll-tracking section links, the current file's context while you scroll the diff (path breadcrumbs, `+/−`, comment count), the **Approve | Require changes** verdict, the **Side-by-side** toggle, the comment count (click steps to the next comment), the review-change count, **Undo**, and the **Actions** menu. **Description**, **Decisions**, **Commits**, **Files changed**, and **Diff** are clickable tabs whose blue active state follows the visible section.
 - **Description** — the lifted PR description (the [notes-commit convention](CLI.md#the-notes-commit-convention)), a rendered card with no provenance chrome. A **Rendered | Source** pill switches to a line-numbered source view; both are commentable.
+- **Decisions** — the lifted `PR-DECISION-<topic>.md` files, one card each in path order, titled by topic. Same chrome and same commentability as the Description: a reviewer reads WHY a choice was made, and can object to the reasoning itself rather than only to the code that followed from it.
 - **Commits** — the commit table; rows become selectable for range filtering when snapshots are embedded.
 - **Files changed** — the file index (status, path, per-file `+/−`). This section IS the navigator; there is no separate sidebar.
 - **Diff** — one collapsible panel per file. Headers carry the status badge, path, the Markdown view pill (for `.md` files), **Wrap | Scroll**, comment and draft counts, `+/−`, and the **Viewed** checkbox.
@@ -73,7 +74,7 @@ Markdown appears in three places, all rendered by `packdiff-dto::markdown` (buil
 
 - **Comment bodies.**
 - **Markdown files** — open in the **Rendered** view, built from the diff hunks (added runs tinted green, removed red); the **Rendered | Source** pill switches to the diff. The choice persists per file.
-- **The Description panel** — **Rendered | Source**, both commentable (rendered blocks anchor to the source line they start at).
+- **The Description and Decision panels** — **Rendered | Source**, both commentable (rendered blocks anchor to the source line they start at); each panel remembers its own view.
 
 The dialect is deliberately a subset: ATX headings, fenced code blocks, nested ordered and unordered lists, blockquotes, thematic breaks, paragraphs; inline `` `code` ``, `**bold**`, `*italic*`, and `[links](https://…)` (`http` / `https` / `mailto` targets only). Underscores are NOT emphasis, so `snake_case` identifiers survive verbatim. A single newline inside a paragraph is a hard break, matching how people write review comments. Every input character is HTML-escaped first — hostile input cannot smuggle markup or `javascript:` URLs.
 

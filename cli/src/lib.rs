@@ -52,9 +52,32 @@ const MAX_SNAPSHOT_BLOB_BYTES: usize = 2 * 1024 * 1024;
 /// `PACKDIFF_SYSTEM_USER_EMAIL` environment variable.
 pub const DEFAULT_SYSTEM_USER_EMAIL: &str = "dmitry.korolev+elon-presley@gmail.com";
 
-/// The one notes file recognized today: the future pull request's
-/// description, lifted into its own commentable page panel.
+/// The future pull request's description, lifted into its own commentable
+/// page panel.
 const NOTES_DESCRIPTION_PATH: &str = "PR-DESCRIPTION.md";
+
+/// Journaled decisions are `PR-DECISION-<topic>.md` at the repository root:
+/// what was decided while the change was made, and why. Each becomes its own
+/// commentable panel, so a reviewer reads the reasoning instead of
+/// re-deriving it from the diff.
+const NOTES_DECISION_PREFIX: &str = "PR-DECISION-";
+const NOTES_DECISION_SUFFIX: &str = ".md";
+
+/// Whether a repository-relative path is a journaled decision. The topic must
+/// be non-empty and the file must sit at the root — a `PR-DECISION-*.md`
+/// nested under a directory is ordinary documentation under review, not a
+/// notes file lifted off the page.
+fn is_decision_path(path: &str) -> bool {
+  !path.contains('/')
+    && path.starts_with(NOTES_DECISION_PREFIX)
+    && path.ends_with(NOTES_DECISION_SUFFIX)
+    && path.len() > NOTES_DECISION_PREFIX.len() + NOTES_DECISION_SUFFIX.len()
+}
+
+/// Whether a path is any notes file: the description or a journaled decision.
+fn is_notes_path(path: &str) -> bool {
+  path == NOTES_DESCRIPTION_PATH || is_decision_path(path)
+}
 
 /// What to pack: the repository, the two refs, and the diff semantics.
 /// Construct with [`PackOptions::new`] (the CLI's defaults), then adjust the
@@ -119,7 +142,7 @@ pub fn set_verbose(enabled: bool) {
 /// expand-context control (any non-empty range: the endpoint boundaries
 /// carry the full file contents). `None` only for an empty range.
 fn collect_snapshots(
-  repo: &str, merge_base: &str, commits: &[packdiff_dto::diff::Commit], exclude: Option<&str>,
+  repo: &str, merge_base: &str, commits: &[packdiff_dto::diff::Commit], exclude: &[&str],
   progress: &dyn ProgressObserver,
 ) -> Result<Option<RangeSnapshots>, Error> {
   if commits.is_empty() {
@@ -137,9 +160,9 @@ fn collect_snapshots(
     tracked.extend(git::changed_paths(repo, &pair[0], &pair[1])?);
     progress.step(&format!("changes {}..{}", &pair[0][..7], &pair[1][..7]));
   }
-  // A boundary pair spanning a notes commit picks up the lifted notes file;
-  // it must not resurface in sub-range diffs.
-  let paths: Vec<String> = tracked.into_iter().filter(|p| Some(p.as_str()) != exclude).collect();
+  // A boundary pair spanning a notes commit picks up the lifted notes files;
+  // they must not resurface in sub-range diffs.
+  let paths: Vec<String> = tracked.into_iter().filter(|p| !exclude.contains(&p.as_str())).collect();
   // One long-lived `cat-file --batch-check` child for every boundary listing;
   // per-boundary progress ticks exactly as before.
   let mut trees = git::TreeReader::new(repo)?;
@@ -163,53 +186,72 @@ fn collect_snapshots(
 }
 
 /// Partition the range's commits per the notes-commit convention: commits
-/// authored by `notes_email` whose changes are CONFINED to the notes file
-/// carry notes such as `PR-DESCRIPTION.md`, not code under review. Both
-/// halves of the test matter. Authorship alone is not enough: the notes
-/// identity may also author code — a run orchestrator like scsh integrates
-/// every agent commit under one bot identity — and code commits must stay
-/// on the page no matter who authored them. Touching the description alone
-/// is not enough either: a user-authored description must not be claimed,
-/// and a mixed commit (code + description in one) is code. Returns the code
-/// commits plus the lifted [`NotesFile`] — the description text as of the
-/// last notes commit. With no notes email, no notes commits, or no readable
-/// description text, everything stays as it was (hiding commits without
+/// authored by `notes_email` whose changes are CONFINED to notes files carry
+/// notes — `PR-DESCRIPTION.md` and `PR-DECISION-<topic>.md` — not code under
+/// review. Both halves of the test matter. Authorship alone is not enough:
+/// the notes identity may also author code — a run orchestrator like scsh
+/// integrates every agent commit under one bot identity — and code commits
+/// must stay on the page no matter who authored them. Touching a notes file
+/// alone is not enough either: user-authored notes must not be claimed, and
+/// a mixed commit (code + notes in one) is code.
+///
+/// Returns the code commits, the lifted description, and the lifted
+/// decisions ordered by path — each file's text as of the LAST notes commit
+/// that carries it. With no notes email, no notes commits, or nothing
+/// readable to lift, everything stays as it was (hiding commits without
 /// lifting anything would lose history).
 fn split_notes(
   repo: &str, commits: Vec<packdiff_dto::diff::Commit>, notes_email: Option<&str>,
-) -> Result<(Vec<packdiff_dto::diff::Commit>, Option<NotesFile>), Error> {
-  let Some(email) = notes_email else { return Ok((commits, None)) };
+) -> Result<(Vec<packdiff_dto::diff::Commit>, Option<NotesFile>, Vec<NotesFile>), Error> {
+  let Some(email) = notes_email else { return Ok((commits, None, Vec::new())) };
   // Commits arrive oldest-first (`git log --reverse`), so `notes_shas` is too.
   let mut notes_shas = Vec::new();
+  // Every notes path the range touches, deduplicated and ordered by path so
+  // the panels render deterministically.
+  let mut notes_paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
   for c in commits.iter().filter(|c| c.email == email) {
     // `sha^` can fail only for a parentless commit in the range (disjoint
     // histories in two-dot mode); such a commit is not a notes commit.
     let touched = git::changed_paths(repo, &format!("{}^", c.sha), &c.sha).unwrap_or_default();
-    if !touched.is_empty() && touched.iter().all(|p| p == NOTES_DESCRIPTION_PATH) {
+    if !touched.is_empty() && touched.iter().all(|p| is_notes_path(p)) {
       notes_shas.push(c.sha.clone());
+      notes_paths.extend(touched);
     }
   }
   if notes_shas.is_empty() {
-    return Ok((commits, None));
+    return Ok((commits, None, Vec::new()));
   }
-  let mut text = None;
-  for sha in notes_shas.iter().rev() {
-    let blobs = git::tree_blobs(repo, sha, &[NOTES_DESCRIPTION_PATH.to_string()])?;
-    if let Some(id) = blobs.get(NOTES_DESCRIPTION_PATH) {
-      text = git::blob_text(repo, id, MAX_SNAPSHOT_BLOB_BYTES)?;
-      if text.is_some() {
-        break;
+  // A notes file's content is its state at the newest notes commit carrying
+  // it; a later commit that deletes it leaves nothing to lift.
+  let mut lifted: Vec<NotesFile> = Vec::new();
+  for path in &notes_paths {
+    let mut text = None;
+    for sha in notes_shas.iter().rev() {
+      let blobs = git::tree_blobs(repo, sha, std::slice::from_ref(path))?;
+      if let Some(id) = blobs.get(path) {
+        text = git::blob_text(repo, id, MAX_SNAPSHOT_BLOB_BYTES)?;
+        if text.is_some() {
+          break;
+        }
       }
     }
+    if let Some(text) = text {
+      lifted.push(NotesFile { path: path.clone(), text, commits: Vec::new() });
+    }
   }
-  let Some(text) = text else { return Ok((commits, None)) };
+  if lifted.is_empty() {
+    return Ok((commits, None, Vec::new()));
+  }
   let (notes, code): (Vec<_>, Vec<_>) = commits.into_iter().partition(|c| notes_shas.contains(&c.sha));
-  let description = NotesFile {
-    path: NOTES_DESCRIPTION_PATH.to_string(),
-    text,
-    commits: notes.iter().map(|c| c.sha.clone()).collect(),
-  };
-  Ok((code, Some(description)))
+  // Provenance is the notes commits as a whole: one commit may carry the
+  // description and a decision together, so the hidden shas belong to every
+  // file lifted out of them.
+  let notes_commit_shas: Vec<String> = notes.iter().map(|c| c.sha.clone()).collect();
+  for file in &mut lifted {
+    file.commits.clone_from(&notes_commit_shas);
+  }
+  let description = lifted.iter().position(|f| f.path == NOTES_DESCRIPTION_PATH).map(|i| lifted.remove(i));
+  Ok((code, description, lifted))
 }
 
 /// Extract [`PackOptions`]'s diff from git into the typed document: resolve
@@ -231,18 +273,19 @@ pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Re
   progress.stage(Stage::Commits, 1);
   let commits = git::commits(&opts.repo, &lo, &head_sha)?;
   progress.step("");
-  let (commits, description) = split_notes(&opts.repo, commits, opts.notes_email.as_deref())?;
-  // The lifted description leaves the diff entirely: its file drops out of
-  // the file list (and so out of the +/− totals), and out of the snapshot
-  // paths below — the page shows it as its own panel instead.
-  if let Some(d) = &description {
-    files.retain(|f| f.old_path.as_deref() != Some(d.path.as_str()) && f.new_path.as_deref() != Some(d.path.as_str()));
-  }
-  let exclude = description.as_ref().map(|d| d.path.as_str());
+  let (commits, description, decisions) = split_notes(&opts.repo, commits, opts.notes_email.as_deref())?;
+  // Lifted notes leave the diff entirely: their files drop out of the file
+  // list (and so out of the +/− totals), and out of the snapshot paths below
+  // — the page shows each as its own panel instead.
+  let exclude: Vec<&str> = description.iter().chain(decisions.iter()).map(|notes| notes.path.as_str()).collect();
+  files.retain(|f| {
+    let touches = |p: Option<&str>| p.is_some_and(|p| exclude.contains(&p));
+    !touches(f.old_path.as_deref()) && !touches(f.new_path.as_deref())
+  });
   // collect_snapshots drives the Scan and Snapshots stages itself: each is
   // entered with its full item count already known. An empty range skips
   // both stages entirely (no content to snapshot).
-  let snapshots = collect_snapshots(&opts.repo, &lo, &commits, exclude, progress)?;
+  let snapshots = collect_snapshots(&opts.repo, &lo, &commits, &exclude, progress)?;
   Ok(DiffDocument::new(
     git::repo_name(&opts.repo)?,
     RefInfo { name: opts.base.clone(), sha: base_sha },
@@ -253,6 +296,7 @@ pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Re
     files,
     snapshots,
     description,
+    decisions,
   ))
 }
 

@@ -213,17 +213,47 @@ fn render_markdown_preview(f: &FileDiff) -> String {
   format!(r#"<div class="md-preview">{note}{}</div>"#, chunks.join(""))
 }
 
-/// The lifted PR description as a page panel: rendered markdown whose blocks
-/// (including individual list items at every nesting level) carry comment anchors —
-/// `(path, New, 1-based line)` — exactly like the file previews. A "fake
-/// file": not part of the reviewed diff, and shown
-/// with NO provenance chrome — no file name, no notes author. It is simply
-/// there, the way the pull request will present it; the path exists only
-/// inside the comment anchors.
+/// The Markdown | Source pill shared by every notes panel.
+fn md_view_pill(label: &str) -> String {
+  format!(
+    r#"<span class="seg md-seg desc-seg" role="group" aria-label="{label}"><button type="button" data-mdview="preview" class="active" aria-pressed="true">Markdown</button><button type="button" data-mdview="raw" aria-pressed="false">Source</button></span>"#
+  )
+}
+
+/// A decision's human title, derived from its file name: the topic between
+/// `PR-DECISION-` and `.md`, with separators as spaces (`PR-DECISION-retry-
+/// safety.md` → "retry safety"). The file name is the author's only handle on
+/// the panel's title, so it is shown as written rather than case-mangled.
+fn decision_title(path: &str) -> String {
+  let topic = path.trim_start_matches("PR-DECISION-").trim_end_matches(".md");
+  let topic = topic.replace(['-', '_'], " ");
+  if topic.trim().is_empty() {
+    path.to_string()
+  } else {
+    topic
+  }
+}
+
+/// A stable, unique element id for a decision panel, so the page's nav and
+/// deep links can address it. Non-alphanumerics collapse to `-`; the path is
+/// unique per document, so the id is too.
+fn decision_element_id(path: &str) -> String {
+  let slug: String =
+    path.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
+  format!("decision-{slug}")
+}
+
+/// A lifted notes file as a page panel — the PR description, or one journaled
+/// decision: rendered markdown whose blocks (including individual list items at
+/// every nesting level) carry comment anchors — `(path, New, 1-based line)` —
+/// exactly like the file previews. A "fake file": not part of the reviewed
+/// diff, and shown with NO provenance chrome — no file name, no notes author.
+/// It is simply there, the way the pull request will present it; the path
+/// exists only inside the comment anchors.
 ///
 /// A Markdown | Source pill switches between the rendered card and a line-numbered
 /// source view (same anchors), so reviewers can quote exact markdown syntax.
-fn render_description(d: &packdiff_dto::diff::NotesFile) -> String {
+fn render_notes_panel(d: &packdiff_dto::diff::NotesFile) -> String {
   let anchor = esc(&d.path);
   let mut blocks = String::new();
   for (offset, html) in markdown::to_html_review_blocks(&d.text) {
@@ -483,6 +513,11 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   } else {
     ""
   };
+  let decisions_link = if doc.decisions.is_empty() {
+    String::new()
+  } else {
+    r##"<a class="chrome-link section-link" href="#decisions">Decisions</a>"##.to_string()
+  };
   let summary_html = format!(
     r##"<section id="summary" class="review-intro">
 <h2>Summary</h2>
@@ -518,7 +553,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <div class="chrome-links">
 <button type="button" id="review-back" title="Return to the page that opened this review">← Back</button>
 <a class="chrome-link section-link" href="#summary">Summary</a>
-{desc_link}<a class="chrome-link section-link" href="#commits">Commits</a>
+{desc_link}{decisions_link}<a class="chrome-link section-link" href="#commits">Commits</a>
 <a class="chrome-link section-link" href="#files">Files changed</a>
 <a class="chrome-link section-link" href="#diff">Diff</a>
 </div>
@@ -552,6 +587,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 <div id="toast" hidden role="status" aria-live="polite"></div>
 "##,
     desc_link = desc_link,
+    decisions_link = decisions_link,
   ));
 
   page.push_str(r#"<main id="content">"#);
@@ -561,10 +597,31 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   );
   page.push_str(&summary_html);
   if let Some(d) = &doc.description {
-    page.push_str(
-      r#"<section id="description"><h2 class="desc-heading">Description <span class="seg md-seg desc-seg" role="group" aria-label="Description view"><button type="button" data-mdview="preview" class="active" aria-pressed="true">Markdown</button><button type="button" data-mdview="raw" aria-pressed="false">Source</button></span></h2>"#,
-    );
-    page.push_str(&render_description(d));
+    page.push_str(&format!(
+      r#"<section id="description" class="notes-panel" data-anchor="{anchor}"><h2 class="desc-heading">Description {pill}</h2>"#,
+      anchor = esc(&d.path),
+      pill = md_view_pill("Description view"),
+    ));
+    page.push_str(&render_notes_panel(d));
+    page.push_str("</section>\n");
+  }
+  // Journaled decisions: one panel each, in path order, under a single
+  // heading. Each carries the same commentable anchors and Markdown | Source
+  // pill as the description — a reviewer reads WHY a choice was made instead
+  // of re-deriving it from the diff.
+  if !doc.decisions.is_empty() {
+    page.push_str(r#"<section id="decisions"><h2>Decisions</h2>"#);
+    for d in &doc.decisions {
+      page.push_str(&format!(
+        r#"<section class="notes-panel decision" id="{id}" data-anchor="{anchor}"><h3 class="desc-heading">{title} {pill}</h3>"#,
+        id = esc(&decision_element_id(&d.path)),
+        anchor = esc(&d.path),
+        title = esc(&decision_title(&d.path)),
+        pill = md_view_pill("Decision view"),
+      ));
+      page.push_str(&render_notes_panel(d));
+      page.push_str("</section>\n");
+    }
     page.push_str("</section>\n");
   }
   page.push_str("<section id=\"commits\" class=\"collapsible-meta\"><h2>Commits</h2>");
@@ -653,8 +710,48 @@ mod tests {
       Vec::new(),
       None,
       None,
+      Vec::new(),
     );
     let html = render_page(&doc, None, b"\0asm");
     assert_eq!(html.matches("No changes between these refs.").count(), 1);
+    assert!(!html.contains(r#"id="decisions""#), "no journaled decisions, no section");
+  }
+
+  #[test]
+  fn journaled_decisions_render_as_their_own_commentable_panels() {
+    let commit = "a".repeat(40);
+    let reference = packdiff_dto::RefInfo { name: "main".to_string(), sha: commit.clone() };
+    let sha = commit.clone();
+    let decision = move |path: &str, text: &str| packdiff_dto::diff::NotesFile {
+      path: path.to_string(),
+      text: text.to_string(),
+      commits: vec![sha.clone()],
+    };
+    let doc = DiffDocument::new(
+      "repo".to_string(),
+      reference.clone(),
+      reference,
+      commit,
+      "2026-07-16T12:00:00Z".to_string(),
+      Vec::new(),
+      Vec::new(),
+      None,
+      None,
+      vec![
+        decision("PR-DECISION-retry-safety.md", "# Retry safety\n\nOnly unprocessed requests retry."),
+        decision("PR-DECISION-schema_versioning.md", "# Schema\n\nAdditive, so no bump."),
+      ],
+    );
+    let html = render_page(&doc, None, b"\0asm");
+    // One panel per decision, each with its own element id and anchor.
+    assert!(html.contains(r##"href="#decisions">Decisions</a>"##), "the nav offers the section: {html}");
+    assert!(html.contains(r#"id="decision-pr-decision-retry-safety-md""#), "stable per-decision id");
+    assert!(html.contains(r#"data-anchor="PR-DECISION-retry-safety.md""#), "panel carries its comment anchor");
+    // The title is the file's topic, separators read as spaces.
+    assert!(html.contains(">retry safety "), "title derives from the file name: {html}");
+    assert!(html.contains(">schema versioning "), "underscores read as spaces too: {html}");
+    // Rendered markdown blocks are commentable on the decision's own path.
+    assert!(html.contains(r#"data-file="PR-DECISION-retry-safety.md" data-side="New" data-line="1""#));
+    assert_eq!(html.matches(r#"class="notes-panel decision""#).count(), 2, "one panel each, no more");
   }
 }

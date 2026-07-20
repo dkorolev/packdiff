@@ -993,17 +993,17 @@
     }
   });
 
-  // Markdown | Source for both markdown files and the description panel.
-  // On file panels the pill lives inside <summary>: expand the panel and
-  // stop the default <details> toggle dance.
+  // Markdown | Source for markdown files and for every notes panel (the
+  // description and each journaled decision). On file panels the pill lives
+  // inside <summary>: expand the panel and stop the default <details> dance.
   document.addEventListener('click', (ev) => {
     const btn = ev.target.closest('.md-seg button');
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
     const file = btn.closest('details.file');
-    const desc = btn.closest('#description');
-    const host = file || desc;
+    const notes = btn.closest('.notes-panel');
+    const host = file || notes;
     if (!host) return;
     if (file) file.open = true;
     const preview = host.querySelector('.md-preview');
@@ -1022,7 +1022,7 @@
       b.classList.toggle('active', on);
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
-    const key = file ? file.dataset.anchor : '__description__';
+    const key = file ? file.dataset.anchor : notes.dataset.anchor;
     prefs.markdown_views[key] = showPreview ? 'rendered' : 'source';
     savePrefs();
     renderAll();
@@ -2231,8 +2231,11 @@
   setupExpanders();
   document.querySelectorAll('.md-seg').forEach((seg) => {
     const file = seg.closest('details.file');
-    const key = file ? file.dataset.anchor : '__description__';
-    if (prefs.markdown_views[key] === 'source') {
+    const notes = seg.closest('.notes-panel');
+    // Notes panels key their saved view by path, the same as files — one
+    // decision switched to Source does not switch the others.
+    const key = file ? file.dataset.anchor : notes && notes.dataset.anchor;
+    if (key && prefs.markdown_views[key] === 'source') {
       const source = seg.querySelector('[data-mdview="diff"], [data-mdview="raw"]');
       if (source) source.click();
     }

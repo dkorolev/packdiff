@@ -77,9 +77,12 @@ function makeFixture() {
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-qm', 'feature two']);
 
-  // Notes commit: lifts into the Description panel (Markdown | Source).
+  // Notes commit: lifts into the Description panel (Markdown | Source), plus
+  // two journaled decisions, each lifting into its own panel.
   write(repo, 'PR-DESCRIPTION.md',
     '# Fixture PR\n\nA short description body.\n\n- Parent item\n  - Child item\n    - Grandchild item\n- Sibling item\n');
+  write(repo, 'PR-DECISION-retry-safety.md', '# Retry safety\n\nOnly unprocessed requests retry.\n');
+  write(repo, 'PR-DECISION-schema.md', '# Schema\n\nAdditive field, so no bump.\n');
   git(repo, ['add', '-A']);
   const notes = spawnSync(
     'git',
@@ -416,6 +419,30 @@ test('Description Markdown/Source toggles rendered and source views', async ({ p
   await desc.locator('.desc-seg button[data-mdview="preview"]').click();
   await expect(desc.locator('.md-preview')).toBeVisible();
   await expect(desc.locator('.desc-raw')).toBeHidden();
+});
+
+test('journaled decisions render as separate panels with independent views', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const panels = page.locator('#decisions .notes-panel');
+  await expect(panels).toHaveCount(2);
+  // Titles come from the file names, in path order.
+  await expect(panels.first().locator('.desc-heading')).toContainText('retry safety');
+  await expect(panels.nth(1).locator('.desc-heading')).toContainText('schema');
+  await expect(panels.first().locator('h1')).toContainText('Retry safety');
+  // Each panel keeps its OWN Markdown | Source state: switching one to Source
+  // must not drag the other (or the Description) along with it.
+  await panels.first().locator('.desc-seg button[data-mdview="raw"]').click();
+  await expect(panels.first().locator('.desc-raw')).toBeVisible();
+  await expect(panels.first().locator('.md-preview')).toBeHidden();
+  await expect(panels.nth(1).locator('.md-preview')).toBeVisible();
+  await expect(page.locator('#description .md-preview')).toBeVisible();
+  // The per-panel choice survives a reload.
+  await page.reload();
+  await expect(panels.first().locator('.desc-raw')).toBeVisible();
+  await expect(panels.nth(1).locator('.md-preview')).toBeVisible();
+  // Decisions are commentable on their own path, like any other panel.
+  const block = panels.first().locator('.md-block[data-line="1"]');
+  await expect(block).toHaveAttribute('data-file', 'PR-DECISION-retry-safety.md');
 });
 
 test('empty comment composers move to a new line and dismiss on click-away', async ({ page }) => {

@@ -35,7 +35,12 @@ Ref names are resolved with `rev-parse --verify <ref>^{commit}`, so anything git
 
 ## The notes-commit convention
 
-Commits authored by the **notes author** carry PR notes — today, exactly one file is recognized: `PR-DESCRIPTION.md`, the future pull request's description. Such commits are not code under review, so packdiff lifts them out: the commits disappear from the page's commit list and the range filter, the file leaves the diff and the `+`/`−` totals, and the description renders as its own commentable **Description** panel on top of the page (see [PAGE.md](PAGE.md)).
+Commits authored by the **notes author** carry PR notes. Two kinds are recognized, both at the repository root:
+
+- `PR-DESCRIPTION.md` — the future pull request's description.
+- `PR-DECISION-<topic>.md` — a **journaled decision**: what was decided while the change was made, and why. Any number of them; `<topic>` must be non-empty.
+
+Such commits are not code under review, so packdiff lifts them out: the commits disappear from the page's commit list and the range filter, the files leave the diff and the `+`/`−` totals, and each renders as its own commentable panel — **Description** on top, then a **Decisions** section carrying one panel per decision, in path order (see [PAGE.md](PAGE.md)).
 
 The notes author is an email match, configured by environment:
 
@@ -45,7 +50,7 @@ PACKDIFF_SYSTEM_USER_EMAIL   the notes author's commit email.
                              Default: dmitry.korolev+elon-presley@gmail.com
 ```
 
-The lift is conservative: it happens only when a notes-authored commit actually **changed** `PR-DESCRIPTION.md` (a user-authored description is never claimed), and the panel shows the file as of the last notes commit that touched it. When the range has notes-authored commits but none touched the file, nothing is hidden — dropping commits without lifting anything would lose history.
+The lift is conservative on both halves of the test. A commit is notes only when its author matches AND its changes are confined to notes files — the notes identity may also author code (an orchestrator like scsh integrates every agent commit under one bot identity), and a commit mixing code with notes is code. A notes file is claimed only when a notes-authored commit actually **changed** it, so a human-authored `PR-DESCRIPTION.md` or `PR-DECISION-*.md` stays ordinary code under review, as does any `PR-DECISION-*.md` nested under a directory. Each panel shows its file as of the last notes commit that touched it. When the range has notes-authored commits but nothing readable to lift, nothing is hidden — dropping commits without lifting anything would lose history.
 
 ## Liberal for humans, canonical for machines
 
@@ -86,6 +91,7 @@ Success — `{ "Packed": { ... } }`:
     "deletions": 67,
     "binary_files": 0,
     "description": "PR-DESCRIPTION.md",
+    "decisions": ["PR-DECISION-retry-safety.md"],
     "notes_commits": ["<40-hex>"],
     "warnings": []
   }
