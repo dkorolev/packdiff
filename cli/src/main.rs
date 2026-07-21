@@ -51,12 +51,20 @@ OPTIONS:
   -h, --help            print this help
   -V, --version         print version
 
+THE NOTES-COMMIT CONVENTION:
+  A commit that changes NOTHING BUT notes files at the repository root —
+  PR-DESCRIPTION.md and PR-DECISION-<topic>.md — carries notes, not code.
+  It is hidden from the commit list, its files leave the diff and the +/-
+  totals, and each file becomes a commentable page panel: Description on
+  top, then Decisions. Authorship does not matter; confinement does, so a
+  commit mixing code with notes stays code in full. Committing the
+  description more than once is malformed history: the page flags it and
+  keeps every version, newest first, each commentable on its own.
+
 ENVIRONMENT:
-  PACKDIFF_SYSTEM_USER_EMAIL   the notes-author email: commits it authored are
-                               notes, not code — they are hidden from the page
-                               and their PR-DESCRIPTION.md becomes the
-                               commentable Description panel. Set empty to
-                               disable. Default: dmitry.korolev+elon-presley@gmail.com
+  PACKDIFF_SYSTEM_USER_EMAIL   on/off switch for the convention above; set
+                               it EMPTY to disable the lift entirely. Any
+                               non-empty value enables it (the default).
 
 OUTPUT MODES:
   A terminal gets a colored human summary. Piped/redirected stdout (or
@@ -69,7 +77,8 @@ EXIT CODES: run `packdiff help exitcodes` for the full table.
 
 NOT THIS TOOL'S JOB:
   posting comments to a code host    -> your forge's UI or API (gh, glab)
-  side-by-side / syntax highlighting -> deferred; tracked in the README
+  syncing a review between people    -> export/import JSON from the Actions
+                                        menu; upstream sync is deferred
   watching a branch for changes      -> your shell loop or CI
 
 EXAMPLES:
@@ -320,7 +329,7 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
   opts.merge_base = args.merge_base;
   opts.context = args.context;
   opts.title = args.title.clone();
-  // The notes-author email is env-configurable; an empty value disables the
+  // The convention is env-configurable; an empty value disables the
   // notes-commit convention entirely.
   if let Ok(email) = std::env::var("PACKDIFF_SYSTEM_USER_EMAIL") {
     opts.notes_email = if email.trim().is_empty() { None } else { Some(email) };
