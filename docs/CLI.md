@@ -35,22 +35,32 @@ Ref names are resolved with `rev-parse --verify <ref>^{commit}`, so anything git
 
 ## The notes-commit convention
 
-Commits authored by the **notes author** carry PR notes. Two kinds are recognized, both at the repository root:
+A commit that changes **nothing but notes files** carries PR notes, not code under review. Two kinds of notes file are recognized, both at the repository root:
 
 - `PR-DESCRIPTION.md` — the future pull request's description.
 - `PR-DECISION-<topic>.md` — a **journaled decision**: what was decided while the change was made, and why. Any number of them; `<topic>` must be non-empty.
 
-Such commits are not code under review, so packdiff lifts them out: the commits disappear from the page's commit list and the range filter, the files leave the diff and the `+`/`−` totals, and each renders as its own commentable panel — **Description** on top, then a **Decisions** section carrying one panel per decision, in path order (see [PAGE.md](PAGE.md)).
+packdiff lifts such commits out: they disappear from the page's commit list and the range filter, their files leave the diff and the `+`/`−` totals, and each renders as its own commentable panel — **Description** on top, then a **Decisions** section carrying one panel per decision, in path order (see [PAGE.md](PAGE.md)).
 
-The notes author is an email match, configured by environment:
+**Authorship is not part of the test.** A description is metadata about the change whoever signed the commit, and a real notes commit is easy to recognize without a name: it touches nothing else. What the test does insist on is confinement — a commit mixing code with notes is code, and stays on the page in full. So a `PR-DECISION-*.md` that rides in alongside ordinary files is never lifted, nor is any `PR-DECISION-*.md` nested under a directory (that is documentation under review). Each decision panel shows its file as of the last notes commit that touched it. When the range has notes commits but nothing readable to lift, nothing is hidden — dropping commits without lifting anything would lose history.
+
+The convention has one knob, an environment variable kept in email form for backwards compatibility. Its only remaining effect is on/off:
 
 ```
-PACKDIFF_SYSTEM_USER_EMAIL   the notes author's commit email.
-                             Set empty to disable the convention.
-                             Default: dmitry.korolev+elon-presley@gmail.com
+PACKDIFF_SYSTEM_USER_EMAIL   set EMPTY to disable the convention entirely.
+                             Any non-empty value enables it (the default).
 ```
 
-The lift is conservative on both halves of the test. A commit is notes only when its author matches AND its changes are confined to notes files — the notes identity may also author code (an orchestrator like scsh integrates every agent commit under one bot identity), and a commit mixing code with notes is code. A notes file is claimed only when a notes-authored commit actually **changed** it, so a human-authored `PR-DESCRIPTION.md` or `PR-DECISION-*.md` stays ordinary code under review, as does any `PR-DECISION-*.md` nested under a directory. Each panel shows its file as of the last notes commit that touched it. When the range has notes-authored commits but nothing readable to lift, nothing is hidden — dropping commits without lifting anything would lose history.
+### Several description commits
+
+Writing `PR-DESCRIPTION.md` in more than one commit is malformed history: the description belongs in exactly one commit at the tip, or a reviewer cannot tell which text the change is actually claiming. packdiff does not pick a winner and it does not throw drafts away. It:
+
+- flags the branch with a standing orange banner at the top of the page, and emits a `warning:` line plus a `warnings` entry in machine mode;
+- renders **every** version as its own panel, newest first, each labelled with the commit it came from and badged `current` / `superseded`;
+- anchors comments per version — the current one at `PR-DESCRIPTION.md`, each older one at `PR-DESCRIPTION.md@<short-sha>` — so a comment on a draft stays on that draft;
+- still hides all of the description commits from the commit list and keeps the file out of the diff.
+
+The older versions also appear in `--dump-json` as `superseded_descriptions`, newest first.
 
 ## Liberal for humans, canonical for machines
 
@@ -91,6 +101,7 @@ Success — `{ "Packed": { ... } }`:
     "deletions": 67,
     "binary_files": 0,
     "description": "PR-DESCRIPTION.md",
+    "superseded_descriptions": [],
     "decisions": ["PR-DECISION-retry-safety.md"],
     "notes_commits": ["<40-hex>"],
     "warnings": []
@@ -98,7 +109,7 @@ Success — `{ "Packed": { ... } }`:
 }
 ```
 
-`description` names the notes file lifted into the page's Description panel and `notes_commits` lists the hidden notes commits (see the notes-commit convention below); `description` is `null` and `notes_commits` empty when the range has none. The lifted file and commits are excluded from `files`, `commits`, and the `additions`/`deletions` totals.
+`description` names the notes file lifted into the page's Description panel and `notes_commits` lists the hidden notes commits (see the notes-commit convention above); `description` is `null` and `notes_commits` empty when the range has none. `superseded_descriptions` holds the short SHAs of the older description versions, newest first — empty unless the history is malformed. The lifted files and commits are excluded from `files`, `commits`, and the `additions`/`deletions` totals.
 
 Failure — a request-specific variant with `stage` and `exit_code` inside:
 

@@ -18,6 +18,8 @@
   --comment-rail: #d4a72c;
   --comment-soft: rgba(212, 167, 44, 0.12);
   --danger: #cf222e;
+  --warn: #9a6700;
+  --warn-bg: #fff8c5;
   --ok: #1a7f37;
   --tok-com: #6e7781;
   --tok-str: #0a3069;
@@ -54,6 +56,8 @@
     --comment-rail: #9e7c1a;
     --comment-soft: rgba(158, 124, 26, 0.16);
     --danger: #f85149;
+    --warn: #d29922;
+    --warn-bg: #2b2512;
     --ok: #3fb950;
     --tok-com: #8b949e;
     --tok-str: #a5d6ff;
@@ -81,6 +85,8 @@
   --comment-rail: #9e7c1a;
   --comment-soft: rgba(158, 124, 26, 0.16);
   --danger: #f85149;
+  --warn: #d29922;
+  --warn-bg: #2b2512;
   --ok: #3fb950;
   --tok-com: #8b949e;
   --tok-str: #a5d6ff;
@@ -107,6 +113,8 @@
   --comment-rail: #d4a72c;
   --comment-soft: rgba(212, 167, 44, 0.12);
   --danger: #cf222e;
+  --warn: #9a6700;
+  --warn-bg: #fff8c5;
   --ok: #1a7f37;
   --tok-com: #6e7781;
   --tok-str: #0a3069;
@@ -346,6 +354,26 @@ button[aria-pressed="true"] {
 }
 .alert[hidden] { display: none !important; }
 
+/* A standing notice in the document flow, unlike the fixed `#alerts` toasts:
+   it describes the review itself, so it stays put above the content. */
+.notice {
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.notice code {
+  font-family: var(--code-font);
+  font-size: 12px;
+}
+.notice-warn {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+}
+
 /* ---- workspace: sidebar + main ---- */
 .workspace {
   display: flex;
@@ -561,6 +589,18 @@ section.collapsible-meta > h2 { font-size: 14px; color: var(--muted); }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* Several description versions only ever appear in a malformed history; each
+   names the notes commit it came from, and the superseded ones sit muted
+   under the current one so the effective description still reads first. */
+.notes-panel .notes-rev {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.notes-panel .notes-rev code { font-family: var(--code-font); }
+.notes-panel.superseded .md-preview,
+.notes-panel.superseded .desc-raw { border-style: dashed; }
+
 /* Decisions stack under one heading; each names its topic above its own card. */
 #decisions .decision + .decision { margin-top: 20px; }
 #decisions .decision .desc-heading {
@@ -716,6 +756,8 @@ details.file:not([open]) > summary.file-summary {
 .badge-added { color: var(--ok); }
 .badge-deleted { color: var(--danger); }
 .badge-renamed { color: var(--accent); }
+.badge-current { border-color: var(--ok); color: var(--ok); }
+.badge-superseded { border-color: var(--warn); color: var(--warn); }
 .note { padding: 2px 12px; font-size: 12px; }
 
 /* segmented pills */

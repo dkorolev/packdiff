@@ -497,13 +497,14 @@ fn notes_commits_lift_journaled_decisions_into_their_own_panels() {
   write(&repo, "PR-DECISION-schema.md", b"# Schema\n\nAdditive field, so no bump.\n");
   git(&repo, &["add", "-A"]);
   git(&repo, &["-c", "user.email=notes-bot@example.com", "commit", "-qm", "decision: schema"]);
-  // A decision-shaped file NOT at the root, and one authored by a human: both
-  // are ordinary files under review, never lifted.
+  // A decision-shaped file NOT at the root, committed alongside a root one:
+  // the nested path is ordinary documentation, which makes the whole commit
+  // MIXED — so neither file lifts. Confinement is what decides.
   std::fs::create_dir_all(repo.join("docs")).unwrap();
   write(&repo, "docs/PR-DECISION-nested.md", b"# Nested\n\nDocumentation, not notes.\n");
-  write(&repo, "PR-DECISION-human.md", b"# Human\n\nAuthored by a person.\n");
+  write(&repo, "PR-DECISION-mixed.md", b"# Mixed\n\nRode in with ordinary docs.\n");
   git(&repo, &["add", "-A"]);
-  git(&repo, &["commit", "-qm", "docs and a human decision"]);
+  git(&repo, &["commit", "-qm", "docs and a mixed decision"]);
 
   let out = tmp.join("decisions.html");
   let dump = tmp.join("decisions.json");
@@ -543,10 +544,97 @@ fn notes_commits_lift_journaled_decisions_into_their_own_panels() {
   assert!(html.contains("<h1>Retry safety</h1>"), "decisions render at build time");
   assert!(!html.contains("decision: schema"), "the notes commit stays off the commits table");
   assert!(!html.contains(">PR-DECISION-schema.md</a>"), "lifted decisions leave the Files changed index");
-  // The human-authored and nested look-alikes stay ordinary files under review.
-  assert!(html.contains(">PR-DECISION-human.md</a>"), "a human-authored decision file is code under review");
+  // The mixed commit's files stay ordinary code under review.
+  assert!(html.contains(">PR-DECISION-mixed.md</a>"), "a decision sharing its commit with code is not lifted");
   assert!(html.contains(">docs/PR-DECISION-nested.md</a>"), "a nested decision file is not a notes file");
   assert_eq!(html.matches(r#"class="notes-panel decision""#).count(), 2, "exactly the two lifted decisions");
+
+  let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Committing `PR-DESCRIPTION.md` more than once is malformed history. The
+/// page must say so, keep every version commentable, and still hide all of
+/// the description commits from the commit list and the diff.
+#[test]
+fn several_description_commits_are_flagged_and_all_versions_stay_commentable() {
+  if !git_available() {
+    eprintln!("SKIP: git not found on PATH");
+    return;
+  }
+  let tmp = tmpdir("multidesc");
+  let repo = tmp.join("sample");
+  make_repo(&repo);
+  git(&repo, &["checkout", "-q", "feature"]);
+  write(&repo, "PR-DESCRIPTION.md", b"# Draft one\n\nFirst attempt.\n");
+  git(&repo, &["add", "-A"]);
+  git(&repo, &["commit", "-qm", "Add PR-DESCRIPTION.md"]);
+  write(&repo, "PR-DESCRIPTION.md", b"# Draft two\n\nSecond attempt.\n");
+  git(&repo, &["add", "-A"]);
+  git(&repo, &["commit", "-qm", "Prepare PR description."]);
+  write(&repo, "PR-DESCRIPTION.md", b"# Final\n\nWhat the change actually claims.\n");
+  git(&repo, &["add", "-A"]);
+  git(&repo, &["commit", "-qm", "Rewrite the PR description."]);
+
+  let out = tmp.join("multidesc.html");
+  let dump = tmp.join("multidesc.json");
+  let output = Command::new(bin())
+    .args([
+      "main",
+      "feature",
+      "-C",
+      repo.to_str().unwrap(),
+      "-o",
+      out.to_str().unwrap(),
+      "--dump-json",
+      dump.to_str().unwrap(),
+    ])
+    .output()
+    .unwrap();
+  assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+  let packed = &serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["Packed"];
+  assert_eq!(packed["commits"], 2, "all three description commits are hidden");
+  assert_eq!(packed["files"], 5, "PR-DESCRIPTION.md never enters the diff");
+  assert_eq!(packed["description"], "PR-DESCRIPTION.md");
+  assert_eq!(packed["superseded_descriptions"].as_array().unwrap().len(), 2);
+  // The malformed history is loud in both channels.
+  let warnings = packed["warnings"].as_array().unwrap();
+  assert_eq!(warnings.len(), 1, "{warnings:?}");
+  assert!(warnings[0].as_str().unwrap().contains("3 separate commits write PR-DESCRIPTION.md"));
+  assert!(String::from_utf8_lossy(&output.stderr).contains("warning: malformed commit history"));
+
+  let typed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+  assert!(typed["description"]["text"].as_str().unwrap().starts_with("# Final"), "newest first");
+  let older = typed["superseded_descriptions"].as_array().unwrap();
+  assert!(older[0]["text"].as_str().unwrap().starts_with("# Draft two"));
+  assert!(older[1]["text"].as_str().unwrap().starts_with("# Draft one"));
+
+  let html = std::fs::read_to_string(&out).unwrap();
+  assert!(html.contains(r#"id="malformed-history" class="notice notice-warn""#), "the banner is on the page");
+  assert!(html.contains("3 separate commits write <code>PR-DESCRIPTION.md</code>"));
+  // Every version renders, newest first, each with its own comment anchor.
+  assert!(html.contains(r#"<section id="description" class="notes-panel" data-anchor="PR-DESCRIPTION.md">"#));
+  assert_eq!(html.matches(r#"class="notes-panel superseded""#).count(), 2);
+  for heading in ["<h1>Final</h1>", "<h1>Draft two</h1>", "<h1>Draft one</h1>"] {
+    assert!(html.contains(heading), "missing {heading}");
+  }
+  assert!(html.find("<h1>Final</h1>").unwrap() < html.find("<h1>Draft one</h1>").unwrap(), "newest first");
+  // Anchors are per-revision, so a comment on a draft stays on that draft.
+  let anchors: std::collections::BTreeSet<&str> = html
+    .match_indices(r#"<section class="notes-panel superseded" id="description-"#)
+    .map(|(i, _)| {
+      let rest = &html[i..];
+      let start = rest.find(r#"data-anchor="PR-DESCRIPTION.md@"#).unwrap();
+      let value = &rest[start + r#"data-anchor=""#.len()..];
+      &value[..value.find('"').unwrap()]
+    })
+    .collect();
+  assert_eq!(anchors.len(), 2, "each superseded version anchors to its own revision: {anchors:?}");
+  assert!(html.contains(r#"class="badge badge-current""#));
+  assert_eq!(html.matches(r#"class="badge badge-superseded""#).count(), 2);
+  assert!(html.contains("Prepare PR description."), "each panel names the commit it came from");
+  // Named in the panel headings, never in the commit table or file index.
+  assert_eq!(html.matches(r#"class="commit selectable""#).count(), 2, "only the two code commits are listed");
+  assert!(!html.contains(">PR-DESCRIPTION.md</a>"), "not in the Files changed index");
 
   let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -630,11 +718,30 @@ fn notes_commits_lift_into_the_description_panel() {
   assert_eq!(boundaries.len(), 4, "merge-base plus the three CODE commits only");
   assert!(!serde_json::to_string(&typed["snapshots"]).unwrap().contains("PR-DESCRIPTION"));
 
-  // Without a matching notes author (the built-in default does not match
-  // this repo), the same range shows the commit and the file like any other.
-  let plain_out = tmp.join("plain.html");
+  // Authorship is NOT part of the test. With no configured notes email at
+  // all — the built-in default, which this repo's bot does not match — the
+  // same commit still lifts: it is confined to the description, and a
+  // description is metadata about the change whoever signed it.
+  let any_author_out = tmp.join("any-author.html");
   let output = Command::new(bin())
     .env_remove("PACKDIFF_SYSTEM_USER_EMAIL")
+    .args(["main", "feature", "-C", repo.to_str().unwrap(), "-o", any_author_out.to_str().unwrap()])
+    .output()
+    .unwrap();
+  assert!(output.status.success());
+  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  assert_eq!(doc["Packed"]["commits"], 3, "the notes commit lifts on its paths alone");
+  assert_eq!(doc["Packed"]["files"], 6);
+  assert_eq!(doc["Packed"]["description"], "PR-DESCRIPTION.md");
+  let html = std::fs::read_to_string(&any_author_out).unwrap();
+  assert!(html.contains(r#"id="description""#));
+  assert!(!html.contains("pr notes"));
+
+  // An EMPTY notes email is the kill switch: the convention is off, so the
+  // commit and the file are ordinary code again.
+  let plain_out = tmp.join("plain.html");
+  let output = Command::new(bin())
+    .env("PACKDIFF_SYSTEM_USER_EMAIL", "")
     .args(["main", "feature", "-C", repo.to_str().unwrap(), "-o", plain_out.to_str().unwrap()])
     .output()
     .unwrap();

@@ -328,6 +328,14 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
   // pack() drives the Resolve → Render stages; Write stays the CLI's.
   let output = pack(&opts, &progress)?;
   let (doc, page) = (output.document, output.html);
+  // A description committed more than once is malformed history. The page
+  // says so in a banner; scripts and humans driving the CLI hear it too.
+  if !doc.superseded_descriptions.is_empty() {
+    warnings.push(format!(
+      "malformed commit history: {} separate commits write PR-DESCRIPTION.md; squash them into one",
+      doc.superseded_descriptions.len() + 1
+    ));
+  }
 
   progress.stage(Stage::Write, 1);
   let out_path = match args.out.as_deref() {
@@ -391,6 +399,13 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
           "deletions": doc.deletions(),
           "binary_files": doc.files.iter().filter(|f| f.binary).count(),
           "description": doc.description.as_ref().map(|d| &d.path),
+          // Newest first; empty unless the history commits the description
+          // more than once, which the page also flags in a banner.
+          "superseded_descriptions": doc
+            .superseded_descriptions
+            .iter()
+            .filter_map(|d| d.revision.as_ref().map(|r| &r.short))
+            .collect::<Vec<_>>(),
           "decisions": doc.decisions.iter().map(|d| &d.path).collect::<Vec<_>>(),
           // Every lifted notes file records the same hidden commits, so any
           // one of them answers "which commits were lifted off the page".

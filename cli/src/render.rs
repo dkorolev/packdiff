@@ -243,6 +243,58 @@ fn decision_element_id(path: &str) -> String {
   format!("decision-{slug}")
 }
 
+/// The standing warning shown above everything when the branch commits its
+/// PR description more than once. It is not fatal — every version is on the
+/// page and commentable — but it IS malformed, so the banner says what is
+/// wrong, why it matters, and how to fix it. Empty in the well-formed case.
+fn malformed_history_banner(doc: &packdiff_dto::diff::DiffDocument) -> String {
+  if doc.superseded_descriptions.is_empty() {
+    return String::new();
+  }
+  // The current version plus each superseded one; every version came from a
+  // commit exclusively about the description.
+  let versions = doc.superseded_descriptions.len() + 1;
+  format!(
+    r#"<div id="malformed-history" class="notice notice-warn" role="alert"><strong>Malformed commit history:</strong> {versions} separate commits write <code>PR-DESCRIPTION.md</code>. The description is metadata about the change, not part of it, so it belongs in exactly one commit at the tip — several drafts in the history mean a reviewer cannot tell which text the change is actually claiming. All {versions} versions are shown below, newest first, and each takes comments of its own; none of them appears in the commit list or the diff. Squash them into a single description commit.</div>
+"#,
+  )
+}
+
+/// The comment anchor for a superseded description: its path plus the notes
+/// commit that wrote it, so each version collects its own comments while the
+/// current version keeps the bare path.
+fn superseded_anchor(d: &packdiff_dto::diff::NotesFile) -> String {
+  match &d.revision {
+    Some(r) => format!("{}@{}", d.path, r.short),
+    None => d.path.clone(),
+  }
+}
+
+/// A stable element id for a superseded description panel, so deep links and
+/// the malformed-history banner can address it.
+fn superseded_element_id(d: &packdiff_dto::diff::NotesFile) -> String {
+  match &d.revision {
+    Some(r) => format!("description-{}", r.short),
+    None => "description-superseded".to_string(),
+  }
+}
+
+/// The `<sha> · <subject>` chip naming the notes commit a description version
+/// came from, plus whether it is the effective one. Empty when the document
+/// carries a single, unambiguous version — the well-formed case shows no
+/// provenance chrome at all.
+fn revision_label(d: &packdiff_dto::diff::NotesFile, state: &str) -> String {
+  match &d.revision {
+    Some(r) => format!(
+      r#"<span class="notes-rev"><code>{short}</code> {subject}</span> <span class="badge badge-{state}">{state}</span> "#,
+      short = esc(&r.short),
+      subject = esc(&r.subject),
+      state = esc(state),
+    ),
+    None => String::new(),
+  }
+}
+
 /// A lifted notes file as a page panel — the PR description, or one journaled
 /// decision: rendered markdown whose blocks (including individual list items at
 /// every nesting level) carry comment anchors — `(path, New, 1-based line)` —
@@ -253,8 +305,12 @@ fn decision_element_id(path: &str) -> String {
 ///
 /// A Markdown | Source pill switches between the rendered card and a line-numbered
 /// source view (same anchors), so reviewers can quote exact markdown syntax.
-fn render_notes_panel(d: &packdiff_dto::diff::NotesFile) -> String {
-  let anchor = esc(&d.path);
+///
+/// `anchor` is the comment anchor, normally the file's path. Superseded
+/// description versions share one path, so they pass a per-revision anchor
+/// instead and keep their comments to themselves.
+fn render_notes_panel(anchor: &str, d: &packdiff_dto::diff::NotesFile) -> String {
+  let anchor = esc(anchor);
   let mut blocks = String::new();
   for (offset, html) in markdown::to_html_review_blocks(&d.text) {
     let line = offset + 1;
@@ -591,18 +647,37 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   ));
 
   page.push_str(r#"<main id="content">"#);
+  // Standing, in-flow warning — NOT one of the fixed-position `#alerts`
+  // toasts: a malformed history is a property of the review, not a transient
+  // notification, so it sits above everything and stays there.
+  page.push_str(&malformed_history_banner(doc));
   page.push_str(
     r#"<div id="unanchored" hidden><strong>Unanchored comments</strong> <span class="muted">(their diff lines are not in this rendering — e.g. regenerated with different context)</span></div>
 "#,
   );
   page.push_str(&summary_html);
   if let Some(d) = &doc.description {
+    // The current version keeps the bare path as its anchor, so comments
+    // survive a regenerated page. Superseded versions get one anchor each.
     page.push_str(&format!(
-      r#"<section id="description" class="notes-panel" data-anchor="{anchor}"><h2 class="desc-heading">Description {pill}</h2>"#,
+      r#"<section id="description" class="notes-panel" data-anchor="{anchor}"><h2 class="desc-heading">Description {revision}{pill}</h2>"#,
       anchor = esc(&d.path),
+      revision = revision_label(d, "current"),
       pill = md_view_pill("Description view"),
     ));
-    page.push_str(&render_notes_panel(d));
+    page.push_str(&render_notes_panel(&d.path, d));
+    page.push_str("</section>\n");
+  }
+  for d in &doc.superseded_descriptions {
+    let anchor = superseded_anchor(d);
+    page.push_str(&format!(
+      r#"<section class="notes-panel superseded" id="{id}" data-anchor="{anchor}"><h2 class="desc-heading">Description {revision}{pill}</h2>"#,
+      id = esc(&superseded_element_id(d)),
+      anchor = esc(&anchor),
+      revision = revision_label(d, "superseded"),
+      pill = md_view_pill("Superseded description view"),
+    ));
+    page.push_str(&render_notes_panel(&anchor, d));
     page.push_str("</section>\n");
   }
   // Journaled decisions: one panel each, in path order, under a single
@@ -619,7 +694,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
         title = esc(&decision_title(&d.path)),
         pill = md_view_pill("Decision view"),
       ));
-      page.push_str(&render_notes_panel(d));
+      page.push_str(&render_notes_panel(&d.path, d));
       page.push_str("</section>\n");
     }
     page.push_str("</section>\n");
@@ -726,6 +801,7 @@ mod tests {
       path: path.to_string(),
       text: text.to_string(),
       commits: vec![sha.clone()],
+      revision: None,
     };
     let doc = DiffDocument::new(
       "repo".to_string(),
