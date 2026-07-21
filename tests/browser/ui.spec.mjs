@@ -704,3 +704,99 @@ test.describe('large review', () => {
     expect(built).toBeLessThan(total);
   });
 });
+
+// ---- malformed history: several PR-DESCRIPTION.md commits ----------------
+// The description belongs in one commit at the tip. When a branch writes it
+// repeatedly, the page must say so and keep EVERY version commentable — a
+// reviewer may have meant an earlier draft.
+test.describe('several description commits', () => {
+  let multi;
+
+  test.beforeAll(() => {
+    test.setTimeout(120_000);
+    const dir = mkdtempSync(join(tmpdir(), 'packdiff-browser-multidesc-'));
+    const repo = join(dir, 'repo');
+    mkdirSync(repo);
+    git(repo, ['init', '-q']);
+    git(repo, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+    write(repo, 'README.md', '# Fixture\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-qm', 'initial']);
+    git(repo, ['checkout', '-qb', 'feature']);
+    write(repo, 'app.txt', 'the actual change\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-qm', 'the first code commit']);
+    write(repo, 'app.txt', 'the actual change, refined\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-qm', 'the second code commit']);
+    for (const [subject, body] of [
+      ['Add PR-DESCRIPTION.md', '# Draft one\n\nFirst attempt.\n'],
+      ['Prepare PR description.', '# Draft two\n\nSecond attempt.\n'],
+    ]) {
+      write(repo, 'PR-DESCRIPTION.md', body);
+      git(repo, ['add', '-A']);
+      git(repo, ['commit', '-qm', subject]);
+    }
+    const out = join(dir, 'multidesc.html');
+    const r = spawnSync(findBinary(), ['main', 'feature', '-C', repo, '-o', out], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`packdiff failed: ${r.stderr || r.stdout}`);
+    multi = { dir, out, fileUrl: pathToFileURL(out).href };
+  });
+
+  test.afterAll(() => {
+    if (multi?.dir) rmSync(multi.dir, { recursive: true, force: true });
+  });
+
+  test.beforeEach(async ({ page, context }) => {
+    await context.clearCookies();
+    await page.goto(multi.fileUrl);
+    await page.evaluate(() => localStorage.clear());
+    await page.goto(multi.fileUrl);
+    await page.waitForFunction(() => {
+      const el = document.getElementById('comment-count');
+      return el && /comment/.test(el.textContent || '');
+    });
+  });
+
+  test('the banner explains the malformed history and stays in the flow', async ({ page }) => {
+    const banner = page.locator('#malformed-history');
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText('Malformed commit history');
+    await expect(banner).toContainText('2 separate commits write PR-DESCRIPTION.md');
+    // In the document flow above the summary, not a fixed-position toast.
+    expect(await banner.evaluate((el) => getComputedStyle(el).position)).toBe('static');
+    const [bannerBox, summaryBox] = [await banner.boundingBox(), await page.locator('#summary').boundingBox()];
+    expect(bannerBox.y + bannerBox.height).toBeLessThanOrEqual(summaryBox.y);
+    // Neither description commit reaches the commit list or the diff.
+    await expect(page.locator('table.commits')).not.toContainText('Prepare PR description.');
+    await expect(page.locator('#files-full')).not.toContainText('PR-DESCRIPTION.md');
+    await expect(page.locator('.commit.selectable')).toHaveCount(2);
+  });
+
+  test('every description version is separately commentable', async ({ page }) => {
+    const panels = page.locator('#description, .notes-panel.superseded');
+    await expect(panels).toHaveCount(2);
+    // Newest first, and each names the commit it came from.
+    await expect(panels.nth(0)).toContainText('Draft two');
+    await expect(panels.nth(0)).toContainText('current');
+    await expect(panels.nth(1)).toContainText('Draft one');
+    await expect(panels.nth(1)).toContainText('superseded');
+
+    // A comment on the superseded draft anchors to that draft alone.
+    const older = page.locator('.notes-panel.superseded').first();
+    await older.locator('.gutter-btn').first().evaluate((el) => {
+      el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      el.click();
+    });
+    const editor = page.locator('.pd-editor textarea');
+    await expect(editor).toBeVisible({ timeout: 10_000 });
+    await editor.fill('this draft is stale');
+    await page.locator('.pd-editor button.primary').click();
+    await expect(older.locator('.comment-card')).toContainText('this draft is stale');
+    await expect(page.locator('#description .comment-card')).toHaveCount(0);
+
+    const stored = await page.evaluate(() =>
+      Object.keys(localStorage).map((k) => localStorage.getItem(k)).join(''));
+    expect(stored).toContain('PR-DESCRIPTION.md@');
+  });
+});

@@ -101,6 +101,25 @@ Present when the range carries notes commits (the notes-commit convention — se
 
 Comments on the page's Description panel anchor to `path`, side `New`, 1-based lines of `text`.
 
+### `superseded_descriptions` — older drafts of a malformed history
+
+Non-empty only when the range commits `PR-DESCRIPTION.md` more than once, which is malformed: the description is metadata about the change, so it belongs in one commit at the tip. `description` is then the newest version and this array holds the rest, newest first, each with the same `NotesFile` shape plus a `revision` naming the single commit it came from:
+
+```json
+{
+  "superseded_descriptions": [
+    {
+      "path": "PR-DESCRIPTION.md",
+      "text": "# Draft two\n\n…",
+      "commits": ["<40-hex>", "<40-hex>"],
+      "revision": { "short": "ce480aee", "subject": "Prepare PR description." }
+    }
+  ]
+}
+```
+
+`revision` is present ONLY when a document carries several versions of one path — the unambiguous case omits it, so a well-formed document is byte-identical to one produced before this field existed and needs no `schema_version` bump. Comments on a superseded panel anchor to `<path>@<revision.short>`, keeping each draft's comments to itself while the current version keeps the bare `path`.
+
 ### `decisions` — the lifted journaled decisions
 
 The same notes-commit convention applied to `PR-DECISION-<topic>.md` files: decisions recorded while the change was made. Ordered by path, each with the identical `NotesFile` shape and anchoring rule as `description`, and likewise excluded from `files`, `commits`, and the snapshot boundaries. Omitted entirely when the range journals none — a document without decisions is byte-identical to one produced before they existed, which is why this addition carries no `schema_version` bump.

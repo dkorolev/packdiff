@@ -47,9 +47,12 @@ const WASM: &[u8] = include_bytes!(env!("PACKDIFF_WASM_PATH"));
 const MAX_SNAPSHOT_BLOB_BYTES: usize = 2 * 1024 * 1024;
 
 /// The default notes-author email (see [`PackOptions::notes_email`]): the
-/// identity that commits PR notes such as `PR-DESCRIPTION.md`, per the
-/// notes-commit convention. The CLI overrides it from the
-/// `PACKDIFF_SYSTEM_USER_EMAIL` environment variable.
+/// identity that conventionally commits PR notes such as
+/// `PR-DESCRIPTION.md`. Authorship no longer decides what is notes — the
+/// changed paths do — so this value only keeps the option non-empty, i.e.
+/// the convention enabled. The CLI overrides it from the
+/// `PACKDIFF_SYSTEM_USER_EMAIL` environment variable; setting it empty is
+/// how a caller turns the lift off.
 pub const DEFAULT_SYSTEM_USER_EMAIL: &str = "dmitry.korolev+elon-presley@gmail.com";
 
 /// The future pull request's description, lifted into its own commentable
@@ -98,11 +101,12 @@ pub struct PackOptions {
   pub context: u32,
   /// Page title override; `None` derives "repo: base → head".
   pub title: Option<String>,
-  /// The notes-author email. Commits authored by it are notes, not code
-  /// under review: they are hidden from the commit list, and the
-  /// `PR-DESCRIPTION.md` they carry is lifted out of the diff into the
-  /// page's commentable Description panel. `None` disables the convention.
-  /// Defaults to [`DEFAULT_SYSTEM_USER_EMAIL`].
+  /// Kill switch for the notes-commit convention, kept in email form for
+  /// backwards compatibility. `Some(_)` (the default,
+  /// [`DEFAULT_SYSTEM_USER_EMAIL`]) enables the lift: a commit confined to
+  /// notes files is hidden from the commit list and its `PR-DESCRIPTION.md`
+  /// / `PR-DECISION-<topic>.md` become commentable page panels, whoever
+  /// authored it. `None` disables the convention entirely.
   pub notes_email: Option<String>,
 }
 
@@ -185,73 +189,120 @@ fn collect_snapshots(
   Ok(Some(RangeSnapshots { blobs, boundaries }))
 }
 
-/// Partition the range's commits per the notes-commit convention: commits
-/// authored by `notes_email` whose changes are CONFINED to notes files carry
-/// notes — `PR-DESCRIPTION.md` and `PR-DECISION-<topic>.md` — not code under
-/// review. Both halves of the test matter. Authorship alone is not enough:
-/// the notes identity may also author code — a run orchestrator like scsh
-/// integrates every agent commit under one bot identity — and code commits
-/// must stay on the page no matter who authored them. Touching a notes file
-/// alone is not enough either: user-authored notes must not be claimed, and
-/// a mixed commit (code + notes in one) is code.
+/// What [`split_notes`] separated out of the range.
+#[derive(Default)]
+struct LiftedNotes {
+  /// The commits that remain code under review, oldest first.
+  code: Vec<packdiff_dto::diff::Commit>,
+  /// The newest version of the PR description, if the range carries one.
+  description: Option<NotesFile>,
+  /// Older versions of the description, newest first — see
+  /// [`packdiff_dto::diff::DiffDocument::superseded_descriptions`].
+  superseded_descriptions: Vec<NotesFile>,
+  /// The journaled decisions, ordered by path.
+  decisions: Vec<NotesFile>,
+}
+
+/// A notes file's text at one commit, or `None` when the commit does not
+/// carry it (deleted) or it is too large to lift.
+fn notes_text_at(repo: &str, sha: &str, path: &str) -> Result<Option<String>, Error> {
+  let owned = path.to_string();
+  let blobs = git::tree_blobs(repo, sha, std::slice::from_ref(&owned))?;
+  match blobs.get(path) {
+    Some(id) => git::blob_text(repo, id, MAX_SNAPSHOT_BLOB_BYTES),
+    None => Ok(None),
+  }
+}
+
+/// Partition the range's commits per the notes-commit convention: a commit
+/// whose changes are CONFINED to notes files — `PR-DESCRIPTION.md` and
+/// `PR-DECISION-<topic>.md` at the repository root — carries notes, not code
+/// under review. The test is the paths alone. Who authored the commit is
+/// irrelevant: a description is metadata about the change no matter whose
+/// name is on it, and a real notes commit is easy to recognize because it
+/// touches nothing else. A commit mixing code with notes is still code, so a
+/// notes file only ever leaves the diff when some commit was exclusively
+/// about it. `notes_email` survives purely as a kill switch: `None` disables
+/// the convention and everything stays code.
 ///
-/// Returns the code commits, the lifted description, and the lifted
-/// decisions ordered by path — each file's text as of the LAST notes commit
-/// that carries it. With no notes email, no notes commits, or nothing
-/// readable to lift, everything stays as it was (hiding commits without
-/// lifting anything would lose history).
+/// Each decision is lifted at its state in the LAST notes commit that
+/// touched it — journaling is incremental, so only the final text matters.
+/// The description is different: committing it more than once is malformed,
+/// and the reviewer may well have meant to comment on an earlier draft, so
+/// EVERY version is lifted, newest first.
+///
+/// When the range has notes commits but nothing readable to lift, nothing is
+/// hidden — dropping commits without lifting anything would lose history.
 fn split_notes(
   repo: &str, commits: Vec<packdiff_dto::diff::Commit>, notes_email: Option<&str>,
-) -> Result<(Vec<packdiff_dto::diff::Commit>, Option<NotesFile>, Vec<NotesFile>), Error> {
-  let Some(email) = notes_email else { return Ok((commits, None, Vec::new())) };
-  // Commits arrive oldest-first (`git log --reverse`), so `notes_shas` is too.
-  let mut notes_shas = Vec::new();
+) -> Result<LiftedNotes, Error> {
+  let unchanged = |commits| LiftedNotes { code: commits, ..LiftedNotes::default() };
+  if notes_email.is_none() {
+    return Ok(unchanged(commits));
+  }
+  // Commits arrive oldest-first (`git log --reverse`), so `notes` is too.
+  // One changed-paths call per commit: the same per-commit scan the snapshot
+  // pass already performs, and the only way to know a commit is notes.
+  let mut notes: Vec<(&packdiff_dto::diff::Commit, Vec<String>)> = Vec::new();
   // Every notes path the range touches, deduplicated and ordered by path so
   // the panels render deterministically.
   let mut notes_paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-  for c in commits.iter().filter(|c| c.email == email) {
+  for c in &commits {
     // `sha^` can fail only for a parentless commit in the range (disjoint
     // histories in two-dot mode); such a commit is not a notes commit.
     let touched = git::changed_paths(repo, &format!("{}^", c.sha), &c.sha).unwrap_or_default();
     if !touched.is_empty() && touched.iter().all(|p| is_notes_path(p)) {
-      notes_shas.push(c.sha.clone());
-      notes_paths.extend(touched);
+      notes_paths.extend(touched.iter().cloned());
+      notes.push((c, touched));
     }
   }
-  if notes_shas.is_empty() {
-    return Ok((commits, None, Vec::new()));
+  if notes.is_empty() {
+    return Ok(unchanged(commits));
   }
-  // A notes file's content is its state at the newest notes commit carrying
-  // it; a later commit that deletes it leaves nothing to lift.
-  let mut lifted: Vec<NotesFile> = Vec::new();
-  for path in &notes_paths {
-    let mut text = None;
-    for sha in notes_shas.iter().rev() {
-      let blobs = git::tree_blobs(repo, sha, std::slice::from_ref(path))?;
-      if let Some(id) = blobs.get(path) {
-        text = git::blob_text(repo, id, MAX_SNAPSHOT_BLOB_BYTES)?;
-        if text.is_some() {
-          break;
-        }
-      }
-    }
-    if let Some(text) = text {
-      lifted.push(NotesFile { path: path.clone(), text, commits: Vec::new() });
-    }
-  }
-  if lifted.is_empty() {
-    return Ok((commits, None, Vec::new()));
-  }
-  let (notes, code): (Vec<_>, Vec<_>) = commits.into_iter().partition(|c| notes_shas.contains(&c.sha));
   // Provenance is the notes commits as a whole: one commit may carry the
   // description and a decision together, so the hidden shas belong to every
   // file lifted out of them.
-  let notes_commit_shas: Vec<String> = notes.iter().map(|c| c.sha.clone()).collect();
-  for file in &mut lifted {
-    file.commits.clone_from(&notes_commit_shas);
+  let notes_commit_shas: Vec<String> = notes.iter().map(|(c, _)| c.sha.clone()).collect();
+  let lift = |path: &str, text: String, revision| NotesFile {
+    path: path.to_string(),
+    text,
+    commits: notes_commit_shas.clone(),
+    revision,
+  };
+
+  let mut decisions: Vec<NotesFile> = Vec::new();
+  for path in notes_paths.iter().filter(|p| is_decision_path(p)) {
+    // A later commit that deletes the file leaves nothing to lift, so walk
+    // back until some notes commit still carries readable text.
+    for (c, _) in notes.iter().rev() {
+      if let Some(text) = notes_text_at(repo, &c.sha, path)? {
+        decisions.push(lift(path, text, None));
+        break;
+      }
+    }
   }
-  let description = lifted.iter().position(|f| f.path == NOTES_DESCRIPTION_PATH).map(|i| lifted.remove(i));
-  Ok((code, description, lifted))
+  // Every commit that was exclusively about the description contributes one
+  // version, newest first; the first is current, the rest are superseded.
+  let mut versions: Vec<NotesFile> = Vec::new();
+  for (c, _) in notes.iter().rev().filter(|(_, t)| t.iter().any(|p| p == NOTES_DESCRIPTION_PATH)) {
+    if let Some(text) = notes_text_at(repo, &c.sha, NOTES_DESCRIPTION_PATH)? {
+      let revision = packdiff_dto::diff::NotesRevision { short: c.short.clone(), subject: c.subject.clone() };
+      versions.push(lift(NOTES_DESCRIPTION_PATH, text, Some(revision)));
+    }
+  }
+  // A single version is unambiguous, so it needs no revision label.
+  if versions.len() == 1 {
+    versions[0].revision = None;
+  }
+  if versions.is_empty() && decisions.is_empty() {
+    return Ok(unchanged(commits));
+  }
+  let mut versions = versions.into_iter();
+  let description = versions.next();
+  let superseded_descriptions: Vec<NotesFile> = versions.collect();
+  let notes_shas: std::collections::BTreeSet<&String> = notes_commit_shas.iter().collect();
+  let code = commits.into_iter().filter(|c| !notes_shas.contains(&c.sha)).collect();
+  Ok(LiftedNotes { code, description, superseded_descriptions, decisions })
 }
 
 /// Extract [`PackOptions`]'s diff from git into the typed document: resolve
@@ -273,10 +324,12 @@ pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Re
   progress.stage(Stage::Commits, 1);
   let commits = git::commits(&opts.repo, &lo, &head_sha)?;
   progress.step("");
-  let (commits, description, decisions) = split_notes(&opts.repo, commits, opts.notes_email.as_deref())?;
+  let notes = split_notes(&opts.repo, commits, opts.notes_email.as_deref())?;
+  let LiftedNotes { code: commits, description, superseded_descriptions, decisions } = notes;
   // Lifted notes leave the diff entirely: their files drop out of the file
   // list (and so out of the +/− totals), and out of the snapshot paths below
-  // — the page shows each as its own panel instead.
+  // — the page shows each as its own panel instead. Superseded description
+  // versions share the description's path, so they add nothing here.
   let exclude: Vec<&str> = description.iter().chain(decisions.iter()).map(|notes| notes.path.as_str()).collect();
   files.retain(|f| {
     let touches = |p: Option<&str>| p.is_some_and(|p| exclude.contains(&p));
@@ -286,7 +339,7 @@ pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Re
   // entered with its full item count already known. An empty range skips
   // both stages entirely (no content to snapshot).
   let snapshots = collect_snapshots(&opts.repo, &lo, &commits, &exclude, progress)?;
-  Ok(DiffDocument::new(
+  let mut doc = DiffDocument::new(
     git::repo_name(&opts.repo)?,
     RefInfo { name: opts.base.clone(), sha: base_sha },
     RefInfo { name: opts.head.clone(), sha: head_sha },
@@ -297,7 +350,9 @@ pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Re
     snapshots,
     description,
     decisions,
-  ))
+  );
+  doc.superseded_descriptions = superseded_descriptions;
+  Ok(doc)
 }
 
 /// Render a document into the one-file HTML review page, with the comment

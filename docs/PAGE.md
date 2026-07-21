@@ -4,11 +4,12 @@ The HTML file packdiff writes is the whole product: one file, no server, no netw
 
 ## Layout
 
-The review reads top to bottom as one document — summary first, then Description and Decisions (when present), Commits, Files changed, Diff, Activity:
+The review reads top to bottom as one document — a malformed-history banner if one is warranted, then summary, Description and Decisions (when present), Commits, Files changed, Diff, Activity:
 
+- **Malformed-history banner** — an orange notice in the document flow (not one of the transient `#alerts` toasts) shown only when the branch commits `PR-DESCRIPTION.md` more than once. It names the fault, explains why it matters, and says how to fix it; the review below it works normally.
 - **Review summary** — a plain-language line (commit and file counts, `+/−` totals, how to comment) with a **Details** disclosure underneath (repository, refs with SHAs, merge-base, generation time, tool version, schema). Both scroll away.
 - **Pinned navigation** — the ONE row that stays: **← Back**, scroll-tracking section links, the current file's context while you scroll the diff (path breadcrumbs, `+/−`, comment count), the **Approve | Require changes** verdict, the **Side-by-side** toggle, the comment count (click steps to the next comment), the review-change count, **Undo**, and the **Actions** menu. **Description**, **Decisions**, **Commits**, **Files changed**, and **Diff** are clickable tabs whose blue active state follows the visible section.
-- **Description** — the lifted PR description (the [notes-commit convention](CLI.md#the-notes-commit-convention)), a rendered card with no provenance chrome. A **Rendered | Source** pill switches to a line-numbered source view; both are commentable.
+- **Description** — the lifted PR description (the [notes-commit convention](CLI.md#the-notes-commit-convention)), a rendered card with no provenance chrome. A **Rendered | Source** pill switches to a line-numbered source view; both are commentable. In the malformed case the panel repeats: one card per version, newest first, each headed with the commit it came from and a `current` / `superseded` badge, each taking comments of its own (superseded cards anchor at `PR-DESCRIPTION.md@<short-sha>`).
 - **Decisions** — the lifted `PR-DECISION-<topic>.md` files, one card each in path order, titled by topic. Same chrome and same commentability as the Description: a reviewer reads WHY a choice was made, and can object to the reasoning itself rather than only to the code that followed from it.
 - **Commits** — the commit table; rows become selectable for range filtering when snapshots are embedded.
 - **Files changed** — the file index (status, path, per-file `+/−`). This section IS the navigator; there is no separate sidebar.

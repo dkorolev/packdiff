@@ -44,13 +44,24 @@ pub struct DiffDocument {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub snapshots: Option<crate::snapshot::RangeSnapshots>,
   /// The PR description lifted out of the diff (the notes-commit
-  /// convention: commits authored by the system notes author carry notes
-  /// such as `PR-DESCRIPTION.md`, not code under review). Rendered as its
-  /// own commentable panel; its commits and file are excluded from
+  /// convention: a commit whose changes are confined to notes files such as
+  /// `PR-DESCRIPTION.md` carries notes, not code under review). Rendered as
+  /// its own commentable panel; its commits and file are excluded from
   /// `commits` / `files`. `None` (and omitted from JSON) when the range has
-  /// no notes commits.
+  /// no notes commits. When several notes commits each rewrote the
+  /// description, this is the NEWEST version and the older ones land in
+  /// [`Self::superseded_descriptions`].
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub description: Option<NotesFile>,
+  /// Earlier versions of [`Self::description`], newest first — non-empty
+  /// only when the range commits `PR-DESCRIPTION.md` more than once, which
+  /// is a malformed history: the description is metadata about the change,
+  /// so it belongs in exactly one notes commit. Every version is kept (and
+  /// rendered as its own commentable panel) rather than silently dropped,
+  /// so a reviewer can comment on whichever one they meant. Empty (and
+  /// omitted from JSON) in the well-formed case.
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub superseded_descriptions: Vec<NotesFile>,
   /// Decisions journaled while the change was made, lifted out of the diff
   /// by the same notes-commit convention as [`Self::description`]: notes
   /// commits carrying `PR-DECISION-<topic>.md` record what was decided and
@@ -68,13 +79,31 @@ pub struct DiffDocument {
 pub struct NotesFile {
   /// The path the file was committed under (e.g. `PR-DESCRIPTION.md`);
   /// comments on the rendered panel anchor to this path, `New` side,
-  /// 1-based source lines.
+  /// 1-based source lines. Several panels can share a path when
+  /// [`Self::revision`] tells them apart.
   pub path: String,
-  /// The file's full markdown text, as of the last notes commit.
+  /// The file's full markdown text, as of the last notes commit — or, when
+  /// [`Self::revision`] is set, as of that one commit.
   pub text: String,
   /// The notes commits (full SHAs, oldest first) hidden from the commit
   /// list — recorded so the provenance stays in the document.
   pub commits: Vec<String>,
+  /// The single notes commit this version came from, set only when the
+  /// document carries several versions of one path and the panels must name
+  /// which is which. `None` (and omitted from JSON) in the unambiguous case.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub revision: Option<NotesRevision>,
+}
+
+/// The notes commit one version of a [`NotesFile`] came from: enough to
+/// label its panel and to point the reviewer at the commit to squash away.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotesRevision {
+  /// Abbreviated commit SHA, as git rendered it.
+  pub short: String,
+  /// The commit's subject line.
+  pub subject: String,
 }
 
 impl DiffDocument {
@@ -96,6 +125,9 @@ impl DiffDocument {
       files,
       snapshots,
       description,
+      // Set by the builder only in the malformed multiple-description case,
+      // which is rare enough not to earn an eleventh positional argument.
+      superseded_descriptions: Vec::new(),
       decisions,
     }
   }
@@ -519,11 +551,13 @@ Binary files a/blob.bin and b/blob.bin differ
         path: "PR-DESCRIPTION.md".into(),
         text: "# Title\n\nBody.".into(),
         commits: vec!["d".repeat(40)],
+        revision: None,
       }),
       vec![NotesFile {
         path: "PR-DECISION-retry-safety.md".into(),
         text: "# Retry safety\n\nOnly unprocessed requests retry.".into(),
         commits: vec!["d".repeat(40)],
+        revision: None,
       }],
     );
     let json = serde_json::to_string(&doc).unwrap();
@@ -552,8 +586,10 @@ Binary files a/blob.bin and b/blob.bin differ
     let json = serde_json::to_string(&none).unwrap();
     assert!(!json.contains("description"));
     assert!(!json.contains("decisions"));
+    assert!(!json.contains("revision"));
     // A document written before decisions existed still reads.
     let back: DiffDocument = serde_json::from_str(&json).unwrap();
     assert!(back.decisions.is_empty());
+    assert!(back.superseded_descriptions.is_empty());
   }
 }
