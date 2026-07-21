@@ -4,4 +4,24 @@
 # Enable with:  git config core.hooksPath .githooks
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+
+# A push that only DELETES refs ships no code, so there is nothing to test.
+# git names each ref on stdin as "<local ref> <local sha> <remote ref>
+# <remote sha>"; a deletion carries the all-zero local sha. Deleting a batch
+# of merged branches would otherwise run the whole suite once per branch.
+# stdin is empty when the hook is invoked outside a real push (--no-verify
+# rehearsals, manual runs), which read simply reports as no lines — and no
+# lines means nothing was proven a deletion, so the suite still runs.
+deletions_only=""
+while read -r _ local_sha _ _; do
+  case "$local_sha" in
+    *[!0]*) deletions_only="no" ;;
+    ?*) [ -n "$deletions_only" ] || deletions_only="yes" ;;
+  esac
+done
+if [ "$deletions_only" = "yes" ]; then
+  echo "pre-push: deletions only, nothing to test"
+  exit 0
+fi
+
 exec ./test.sh
