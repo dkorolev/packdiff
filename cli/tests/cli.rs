@@ -297,6 +297,22 @@ fn help_is_comprehensive_and_free() {
   assert!(text.contains("USAGE:"));
   assert!(text.contains("NOT THIS TOOL'S JOB:"));
   assert!(text.contains("help exitcodes"));
+  // The help text is what users actually read, so it must describe the
+  // notes-commit convention as it BEHAVES — the lift is by path, and the
+  // environment variable is only an on/off switch. These assertions exist
+  // because the help once outlived a change to that rule.
+  assert!(text.contains("PACKDIFF_SYSTEM_USER_EMAIL"));
+  assert!(text.contains("PR-DECISION-<topic>.md"), "both notes kinds are named");
+  assert!(text.contains("Authorship does not matter"), "the lift is by path, not by author");
+  assert!(
+    !text.contains("notes-author email") && !text.contains("commits it authored"),
+    "the help must not claim authorship decides what is notes"
+  );
+  // Likewise, the NOT-THIS-TOOL'S-JOB list must not disown shipped features.
+  for shipped in ["side-by-side", "syntax highlighting"] {
+    let after = text.split("NOT THIS TOOL'S JOB:").nth(1).unwrap_or("");
+    assert!(!after.contains(shipped), "`{shipped}` ships today; it cannot be listed as deferred");
+  }
 
   // `help exitcodes` prints the complete table.
   let output = Command::new(bin()).args(["help", "exitcodes"]).output().unwrap();
@@ -528,7 +544,7 @@ fn notes_commits_lift_journaled_decisions_into_their_own_panels() {
   assert_eq!(
     packed["decisions"],
     serde_json::json!(["PR-DECISION-retry-safety.md", "PR-DECISION-schema.md"]),
-    "root decisions by the notes author lift, in path order"
+    "root decisions confined to their own commits lift, in path order"
   );
   assert_eq!(packed["notes_commits"].as_array().unwrap().len(), 2);
 
@@ -648,8 +664,10 @@ fn notes_commits_lift_into_the_description_panel() {
   let tmp = tmpdir("notes");
   let repo = tmp.join("sample");
   make_repo(&repo);
-  // A notes commit on top of `feature`: PR-DESCRIPTION.md authored by the
-  // notes bot. The trailing `-c` outranks the helper's default user.email.
+  // A notes commit on top of `feature`: PR-DESCRIPTION.md alone. The
+  // trailing `-c` outranks the helper's default user.email — authorship no
+  // longer decides, but the fixture keeps a distinct identity so the
+  // kill-switch case below is exercised against a real second author.
   git(&repo, &["checkout", "-q", "feature"]);
   write(&repo, "PR-DESCRIPTION.md", b"# Add evil\n\nThis PR adds `evil()`.\n\n- point one\n- point two\n");
   git(&repo, &["add", "-A"]);
@@ -661,7 +679,7 @@ fn notes_commits_lift_into_the_description_panel() {
   git(&repo, &["add", "-A"]);
   git(&repo, &["-c", "user.email=notes-bot@example.com", "commit", "-qm", "bot code"]);
 
-  // With the matching notes author: the commit hides, the file lifts.
+  // The commit hides, the file lifts.
   let out = tmp.join("with-notes.html");
   let dump = tmp.join("with-notes.json");
   let output = Command::new(bin())
