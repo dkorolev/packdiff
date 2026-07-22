@@ -52,11 +52,12 @@ const META = JSON.stringify({
   head: { name: 'feature', sha: 'b'.repeat(40) },
 });
 
-function comment(id, line, text, updated) {
+function comment(id, line, text, updated, actor) {
   return JSON.stringify({
     id, file: 'src/app.rs', side: 'New', line, text,
     created_at: '2026-07-03T10:00:00Z',
     updated_at: updated ?? '2026-07-03T10:00:00Z',
+    version: { actor: actor ?? 'test-actor' },
   });
 }
 
@@ -72,7 +73,7 @@ test('exports exist', { skip: !ex }, () => {
 
 test('new document + storage key', { skip: !ex }, () => {
   const doc = call('pd_new_document', META);
-  assert.equal(doc.schema_version, 2);
+  assert.equal(doc.schema_version, 3);
   assert.equal(doc.tool, 'packdiff');
   assert.deepEqual(doc.comments, []);
   const key = call('pd_storage_key', META);
@@ -87,8 +88,10 @@ test('upsert, edit, delete round-trip', { skip: !ex }, () => {
     comment('c1', 42, 'edited', '2026-07-03T11:00:00Z'));
   assert.equal(doc.comments.length, 1);
   assert.equal(doc.comments[0].text, 'edited');
-  doc = call('pd_delete_comment', JSON.stringify(doc), 'c1');
+  doc = call('pd_delete_comment', JSON.stringify(doc), JSON.stringify({ id: 'c1', actor: 'test-actor' }));
   assert.equal(doc.comments.length, 0);
+  assert.equal(doc.tombstones.length, 1, 'the delete left a versioned tombstone');
+  assert.equal(doc.tombstones[0].id, 'c1');
 });
 
 test('ordering is deterministic (file, line, side)', { skip: !ex }, () => {
@@ -98,16 +101,37 @@ test('ordering is deterministic (file, line, side)', { skip: !ex }, () => {
   assert.deepEqual(doc.comments.map((c) => c.id), ['a', 'z']);
 });
 
-test('merge unions by id, newer updated_at wins', { skip: !ex }, () => {
+test('merge is the CRDT join: union, causal order, both directions agree', { skip: !ex }, () => {
   let ours = call('pd_new_document', META);
-  ours = call('pd_upsert_comment', JSON.stringify(ours), comment('shared', 1, 'mine'));
+  ours = call('pd_upsert_comment', JSON.stringify(ours), comment('shared', 1, 'mine', undefined, 'aaaa'));
   let theirs = call('pd_new_document', META);
   theirs = call('pd_upsert_comment', JSON.stringify(theirs),
-    comment('shared', 1, 'theirs-newer', '2026-07-03T12:00:00Z'));
-  theirs = call('pd_upsert_comment', JSON.stringify(theirs), comment('extra', 3, 'new one'));
+    comment('shared', 1, 'first write', undefined, 'zzzz'));
+  theirs = call('pd_upsert_comment', JSON.stringify(theirs),
+    comment('shared', 1, 'theirs-newer', '2026-07-03T12:00:00Z', 'zzzz'));
+  theirs = call('pd_upsert_comment', JSON.stringify(theirs), comment('extra', 3, 'new one', undefined, 'zzzz'));
   const merged = call('pd_merge', JSON.stringify(ours), JSON.stringify(theirs));
   assert.equal(merged.comments.length, 2);
-  assert.equal(merged.comments.find((c) => c.id === 'shared').text, 'theirs-newer');
+  assert.equal(merged.comments.find((c) => c.id === 'shared').text, 'theirs-newer',
+    'their clock-2 edit dominates our clock-1 write');
+  const reversed = call('pd_merge', JSON.stringify(theirs), JSON.stringify(ours));
+  assert.deepEqual(reversed, merged, 'merge direction cannot change the outcome');
+});
+
+test('deletion travels and does not resurrect through re-import', { skip: !ex }, () => {
+  let doc = call('pd_new_document', META);
+  doc = call('pd_upsert_comment', JSON.stringify(doc), comment('c1', 42, 'to be deleted'));
+  const exported = call('pd_export_json', JSON.stringify(doc));
+  doc = call('pd_delete_comment', JSON.stringify(doc), JSON.stringify({ id: 'c1', actor: 'test-actor' }));
+  // Importing the pre-delete export keeps the comment dead...
+  doc = call('pd_merge', JSON.stringify(doc), exported);
+  assert.equal(doc.comments.length, 0, 'the tombstone dominates the imported copy');
+  // ...and merging our state into the other replica deletes it there too.
+  const other = call('pd_merge', exported, JSON.stringify(doc));
+  assert.equal(other.comments.length, 0, 'the deletion propagated');
+  // The tombstone survives the export/import round-trip itself.
+  const round = call('pd_parse_document', call('pd_export_json', JSON.stringify(doc)));
+  assert.equal(round.tombstones.length, 1);
 });
 
 test('exports: markdown groups by file, csv quotes, json reimports', { skip: !ex }, () => {
@@ -186,19 +210,23 @@ test('range diff over snapshots, exactly as the page calls it', { skip: !ex }, (
 test('verdict: set, merge, clear, validate', { skip: !ex }, () => {
   let doc = call('pd_new_document', META);
   doc = call('pd_set_verdict', JSON.stringify(doc),
-    JSON.stringify({ ChangesRequired: { at: '2026-07-13T10:00:00Z' } }));
+    JSON.stringify({ verdict: { ChangesRequired: { at: '2026-07-13T10:00:00Z' } }, actor: 'aaaa' }));
   assert.deepEqual(doc.verdict, { ChangesRequired: { at: '2026-07-13T10:00:00Z' } });
-  // Merge: the later decision wins.
-  let other = call('pd_new_document', META);
+  // Merge: the causally-later decision wins.
+  let other = call('pd_parse_document', JSON.stringify(doc));
   other = call('pd_set_verdict', JSON.stringify(other),
-    JSON.stringify({ Approved: { at: '2026-07-13T12:00:00Z' } }));
+    JSON.stringify({ verdict: { Approved: { at: '2026-07-13T12:00:00Z' } }, actor: 'bbbb' }));
   const merged = call('pd_merge', JSON.stringify(doc), JSON.stringify(other));
   assert.deepEqual(merged.verdict, { Approved: { at: '2026-07-13T12:00:00Z' } });
-  // `null` clears back to in-progress; the field leaves the JSON entirely.
-  doc = call('pd_set_verdict', JSON.stringify(doc), 'null');
-  assert.equal(doc.verdict, undefined);
-  const bad = callRaw('pd_set_verdict', JSON.stringify(doc),
-    JSON.stringify({ Approved: { at: ' ' } }));
+  // A clear is a stamped write: it propagates THROUGH merge instead of
+  // being silently undone by one (the v2 behavior this replaces).
+  let cleared = call('pd_set_verdict', JSON.stringify(merged),
+    JSON.stringify({ verdict: null, actor: 'aaaa' }));
+  assert.equal(cleared.verdict, undefined);
+  const reimported = call('pd_merge', JSON.stringify(cleared), JSON.stringify(merged));
+  assert.equal(reimported.verdict, undefined, 'the stale decision does not resurrect');
+  const bad = callRaw('pd_set_verdict', JSON.stringify(cleared),
+    JSON.stringify({ verdict: { Approved: { at: ' ' } }, actor: 'aaaa' }));
   assert.ok('Error' in bad);
   assert.match(bad.Error.message, /invalid verdict/);
 });

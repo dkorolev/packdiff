@@ -259,6 +259,57 @@ test('older-generation stores are absorbed by merge, never clobbered', async ({ 
   await expect(page.locator('.comment-card')).toContainText('newer old-page note');
 });
 
+test('a deleted comment stays deleted through export and re-import', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  // Create one comment through the real gutter flow.
+  await page.evaluate(() => {
+    for (const d of document.querySelectorAll('#files-full details.file')) {
+      d.open = true;
+      const wrap = d.querySelector('.diff-wrap');
+      const preview = d.querySelector('.md-preview');
+      if (wrap && preview) {
+        preview.hidden = true;
+        wrap.hidden = false;
+      }
+    }
+  });
+  const gutter = page.locator('#files-full .diff-wrap:not([hidden]) tr.commentable .gutter-btn').nth(1);
+  await gutter.evaluate((el) => {
+    el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    el.click();
+  });
+  const editor = page.locator('.pd-editor textarea');
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await editor.fill('doomed comment');
+  await page.locator('.pd-editor button.primary').click();
+  await expect(page.locator('.comment-card')).toHaveCount(1);
+  // Snapshot the store as it stands WITH the comment — this is byte-wise
+  // what Copy JSON exports (the canonical document).
+  const exported = await page.evaluate(() => {
+    const cfg = JSON.parse(document.getElementById('packdiff-config').textContent);
+    return localStorage.getItem('packdiff:v' + cfg.schema_version + ':diff:' + cfg.review_id);
+  });
+  // Delete it, then import the pre-delete export: the tombstone must win —
+  // in the v2 model this exact sequence resurrected the comment.
+  const del = page.locator('.comment-card .comment-actions button', { hasText: 'Delete' });
+  await del.click();
+  await del.click();
+  await expect(page.locator('.comment-card')).toHaveCount(0);
+  await page.locator('#actions-menu summary').click();
+  await page.locator('#import-json').setInputFiles({
+    name: 'review.json', mimeType: 'application/json', buffer: Buffer.from(exported),
+  });
+  await expect(page.locator('#toast')).toContainText('Imported 0 comments');
+  await expect(page.locator('.comment-card')).toHaveCount(0);
+  // And the deadness persists — the merged store carries the tombstone.
+  await page.reload();
+  await page.waitForFunction(() => {
+    const el = document.getElementById('comment-count');
+    return el && /comment/.test(el.textContent || '');
+  });
+  await expect(page.locator('.comment-card')).toHaveCount(0);
+});
+
 test('review outcome contributes at most one final action', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   // Comment is the default no-verdict outcome and is not an action.

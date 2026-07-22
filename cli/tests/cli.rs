@@ -192,7 +192,7 @@ fn end_to_end() {
   // The dumped DiffDocument parses back through the dto schema, with
   // single-key line unions.
   let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
-  assert_eq!(doc["schema_version"], 2);
+  assert_eq!(doc["schema_version"], 3);
   assert_eq!(doc["files"].as_array().unwrap().len(), 5);
   assert_eq!(doc["base"]["name"], "main");
   // Snapshots: one boundary per commit plus the merge base, and the binary

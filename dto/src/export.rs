@@ -110,6 +110,8 @@ mod tests {
       created_at: "2026-07-03T10:05:00Z".into(),
       updated_at: "2026-07-03T10:05:00Z".into(),
       resolved_at: None,
+      version: Default::default(),
+      resolution_version: Default::default(),
     })
     .unwrap();
     d.upsert(Comment {
@@ -121,6 +123,8 @@ mod tests {
       created_at: "2026-07-03T10:00:00Z".into(),
       updated_at: "2026-07-03T10:00:00Z".into(),
       resolved_at: None,
+      version: Default::default(),
+      resolution_version: Default::default(),
     })
     .unwrap();
     d

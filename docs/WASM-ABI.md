@@ -47,10 +47,10 @@ API (all return the packed-u64 envelope; `meta` and `doc`/`comment`/`incoming` a
 | --- | --- | --- |
 | `pd_new_document` | `meta` | fresh empty `ReviewDocument` object |
 | `pd_parse_document` | `doc` | validated + normalized `ReviewDocument` object (the load path; rejects newer `schema_version`, invalid comments, garbage) |
-| `pd_upsert_comment` | `doc`, `comment` | updated document (insert, or replace by `id`) |
-| `pd_delete_comment` | `doc`, `id` *(plain string, not JSON)* | updated document; deleting a missing id is not an error |
-| `pd_merge` | `doc`, `incoming` | merged document (union by id, later `updated_at` wins; later verdict wins) — the Import JSON path |
-| `pd_set_verdict` | `doc`, `verdict` (`{"Approved": {"at": "…"}}` / `{"ChangesRequired": {"at": "…"}}`, or the literal `null` to clear) | updated document — the review-level verdict |
+| `pd_upsert_comment` | `doc`, `comment` (`version.actor` names the writer; the model stamps the sequence) | updated document (insert, or replace by `id`) |
+| `pd_delete_comment` | `doc`, `request` (`{"id": "…", "actor": "…"}` — a delete is a write, so it names its actor) | updated document with the versioned tombstone; deleting a missing id is not an error |
+| `pd_merge` | `doc`, `incoming` | merged document — the CRDT join (commutative, associative, idempotent; registers decide by Lamport version, tombstones keep deletions deleted) — the Import JSON path |
+| `pd_set_verdict` | `doc`, `request` (`{"verdict": V, "actor": "…"}` where `V` is `{"Approved": {"at": "…"}}` / `{"ChangesRequired": {"at": "…"}}`, or `null` to clear — a stamped write, so clearing merges) | updated document — the review-level verdict |
 | `pd_export_json` | `doc` | canonical pretty JSON **string** |
 | `pd_export_markdown` | `doc` | Markdown **string** |
 | `pd_export_csv` | `doc` | RFC 4180 CSV **string** |
@@ -73,7 +73,7 @@ Document/comment shapes and all semantics (validation, ordering, merge rules) ar
 
 ## Purity
 
-The module has no clock and no entropy source. Comment `id`s and RFC 3339 timestamps arrive from the caller inside the comment JSON; the same call with the same bytes always returns the same bytes.
+The module has no clock and no entropy source. Comment `id`s, actor ids, and RFC 3339 timestamps arrive from the caller; the document's Lamport clock is a deterministic counter. The same call with the same bytes always returns the same bytes.
 
 ## Minimal JS bridge
 

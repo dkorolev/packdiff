@@ -2,7 +2,7 @@
 
 The `dto/` crate is the single source of truth for every piece of data packdiff handles. It is pure logic: no filesystem, no subprocess, no clock, no randomness. The CLI links it natively; the generated page runs the exact same crate compiled to WebAssembly. Rust API docs: `cargo doc -p packdiff-dto --open`.
 
-Both document families carry `schema_version` (currently `2`) and `tool: "packdiff"`. v2 added the review verdict and per-comment resolution; a v2 reader accepts v1 documents (the new fields default to absent), and a v1 reader rejects v2 documents loudly, by design. Diff documents are shape-identical across v1 and v2.
+Both document families carry `schema_version` (currently `3`) and `tool: "packdiff"`. v2 added the review verdict and per-comment resolution; v3 made the review merge a CRDT (per-register versions, tombstones, the document clock). A newer reader accepts older documents (the new fields default to absent); an older reader rejects newer documents loudly, by design. Diff documents are shape-identical across all three.
 
 ## Encoding and compatibility rules
 
@@ -142,11 +142,12 @@ The mutable review state. Lives in the browser's localStorage; every mutation go
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "tool": "packdiff",
   "repo": "myrepo",
   "base": { "name": "main",       "sha": "<40-hex>" },
   "head": { "name": "my-feature", "sha": "<40-hex>" },
+  "clock": 7,
   "comments": [
     {
       "id": "cmcdkq8x1a2b3c",
@@ -156,10 +157,21 @@ The mutable review state. Lives in the browser's localStorage; every mutation go
       "text": "multi\nline note",
       "created_at": "2026-07-03T10:00:00.000Z",
       "updated_at": "2026-07-03T10:05:00.000Z",
-      "resolved_at": "2026-07-03T11:00:00.000Z"
+      "resolved_at": "2026-07-03T11:00:00.000Z",
+      "version":            { "seq": 4, "actor": "a1b2c3d4" },
+      "resolution_version": { "seq": 6, "actor": "e5f6a7b8" }
     }
   ],
-  "verdict": { "ChangesRequired": { "at": "2026-07-03T11:00:00.000Z" } }
+  "verdict": { "ChangesRequired": { "at": "2026-07-03T11:00:00.000Z" } },
+  "verdict_version": { "seq": 7, "actor": "a1b2c3d4" },
+  "tombstones": [
+    { "id": "cmc0ldid", "deleted": { "seq": 5, "actor": "a1b2c3d4" },
+      "shadow": { "id": "cmc0ldid", "file": "src/app.rs", "side": "New", "line": 7,
+        "text": "the deleted comment's registers, preserved",
+        "created_at": "…", "updated_at": "…",
+        "version": { "seq": 2, "actor": "a1b2c3d4" },
+        "resolution_version": { "seq": 2, "actor": "a1b2c3d4" } } }
+  ]
 }
 ```
 
@@ -170,32 +182,37 @@ The mutable review state. Lives in the browser's localStorage; every mutation go
 
 ### Resolution
 
-A comment is **resolved** when `resolved_at` (RFC 3339 UTC, caller-supplied) is present, and **open** when it is absent — reopening removes the field; it is never `null`. Resolution rides the comment through ordinary `upsert`, with the accompanying `updated_at` bump carrying it through merges. v1 documents have no `resolved_at` and parse as all-open.
+A comment is **resolved** when `resolved_at` (RFC 3339 UTC, caller-supplied) is present, and **open** when it is absent — reopening removes the field; it is never `null`. Resolution rides the comment through ordinary `upsert`; the engine stamps its own register (`resolution_version`), so a resolve merges independently of a concurrent text edit. v1 documents have no `resolved_at` and parse as all-open.
 
 ### The verdict
 
-The GitHub-shaped review-level decision: `verdict` is a single-key union — `{ "Approved": { "at": "…" } }` or `{ "ChangesRequired": { "at": "…" } }` — and is absent while the review is in progress. `ReviewDocument::set_verdict` (WASM: `pd_set_verdict`) sets, replaces, or clears it. The timestamp is the payload on purpose: it is the merge tiebreaker.
+The GitHub-shaped review-level decision: `verdict` is a single-key union — `{ "Approved": { "at": "…" } }` or `{ "ChangesRequired": { "at": "…" } }` — and is absent while the review is in progress. `ReviewDocument::set_verdict_by` (WASM: `pd_set_verdict`) sets, replaces, or clears it; every case, the clearing one included, is a stamped write under `verdict_version`, which is what lets a clear propagate through merges. `at` is what humans and exports read.
 
 ### Validation (applied on every entry into the document)
 
-`id`, `file`, `text`, `created_at`, `updated_at` non-empty; `line >= 1`; `resolved_at` and the verdict's `at`, when present, non-empty. `ReviewDocument::parse` additionally rejects newer schemas and re-sorts, so untrusted input (imports, hand-edited stores) is normalized at the boundary.
+`id`, `file`, `text`, `created_at`, `updated_at` non-empty; `line >= 1`; `resolved_at` and the verdict's `at`, when present, non-empty; tombstone ids non-empty and shadows validated as comments. `ReviewDocument::parse` additionally rejects newer schemas, re-sorts, raises the clock over any hand-raised version, and settles liveness, so untrusted input (imports, hand-edited stores) is normalized at the boundary.
 
 ### Canonical order
 
-Comments always sort by `(file, line, side, created_at, id)` with `old` before `new` on the same line. Every operation restores this order.
+Comments always sort by `(file, line, side, created_at, id)` with `old` before `new` on the same line; tombstones by `id`. Every operation restores this order.
 
 ### Merge semantics (`merge` — the Import JSON path)
 
-- Union by `id`.
-- On id collision the comment with the **later `updated_at`** wins (RFC 3339 UTC strings compare correctly as strings); an exact tie keeps the existing comment.
-- The verdict follows the same rule on its `at`: the later decision wins, a decision beats no decision, a tie keeps the existing one. Merging never clears a verdict.
+The merge is a **state-CRDT join**: commutative, associative, idempotent — property-tested in `dto/src/review.rs`, so the order two reviewers exchange JSON in cannot change where their documents converge. The full model, with the reasoning and the rejected alternatives (vector clocks, HLC, CRDT dependencies, character-wise text merge), lives in that file's module documentation; the shape of it:
+
+- **Versions, not wall clocks, decide.** The document carries a Lamport `clock`; every write stamps its register with `{ seq, actor }` (`seq` = clock + 1; `actor` is the writing browser profile's caller-supplied id, the deterministic tiebreaker). Wall-clock timestamps remain display metadata.
+- **Two registers per comment.** `version` governs content (anchor + text + `created_at`), `resolution_version` governs `resolved_at`; they merge independently, so a concurrent edit and resolve both survive. On id collision each register keeps the side with the greater `(seq, timestamp, actor)` key — the timestamp component is inert for post-v2 writes and exists so upgraded v2 stores merge exactly as v2 did (newer `updated_at` wins).
+- **Deletions are facts.** `delete` writes a `tombstone` carrying the delete's version and the dead comment's registers (its `shadow` — discarding them would break associativity). A comment stays dead only when the tombstone's `seq` strictly exceeds its content `seq` — i.e. only a delete that causally observed that text kills it; a concurrent edit revives the comment, keeping the text, because text is the irreplaceable thing. Tombstones are never garbage-collected — a store is scoped to one diff and dies with the review — and they ride the canonical JSON, so deletions travel through export/import.
+- **The verdict is one more register**, whose value may be absent — so clearing merges instead of silently un-clearing on import (the v2 behavior).
 - The receiving document's metadata (`repo`, `base`, `head`) is kept — importing never re-targets a store. This is what carries comments across regenerated diffs: export from the old page, import into the new one.
+
+**Compatibility:** v1/v2 documents parse with zero versions and a zero clock; merging two upgraded stores reproduces v2's outcomes (minus v2's merge-direction tie bug). A post-upgrade write beats any pre-upgrade write for the same id regardless of wall clock — a one-time upgrade transient, accepted because causality cannot be reconstructed from v2 data. Parsing alone never modernizes a document's `schema_version`; its first write does.
 
 ## Exports
 
 | Format | Producer | Shape |
 | --- | --- | --- |
-| JSON | `export::to_json` | The canonical pretty `ReviewDocument` + trailing newline. Lossless; the only format import accepts. |
+| JSON | `export::to_json` | The canonical pretty `ReviewDocument` + trailing newline. Lossless — tombstones and versions included, so deletions travel; the only format import accepts. |
 | Markdown | `export::to_markdown` | `# Review comments — <repo> <base>..<head>`, a `Verdict: …` line when set, a count/SHA line (`, N open` when some comments are resolved), then `## <file>` sections with `- **L<line> (<side>)** — text` items (`(<side>, resolved)` on resolved comments); multi-line comment text is indented two spaces. |
 | CSV | `export::to_csv` | RFC 4180: every field quoted (`"` doubled), CRLF row endings, header `file,side,line,created_at,updated_at,resolved_at,text` (`resolved_at` empty for open comments). One row per comment; the verdict lives in JSON/Markdown only. |
 
@@ -207,4 +224,4 @@ The engine derives one key shape — `storage_key()`, exposed to the page as `pd
 packdiff:v1:<repo>:<base-sha-12>..<head-sha-12>
 ```
 
-This is the **legacy** page key. Generated pages now file review state under `packdiff:v<schema-generation>:diff:<review_id>` (`v2` today), where `review_id` is a render-time fingerprint of the canonical reviewable diff content (repository name plus the typed file diffs — not the refs, filename, title, or timestamp), embedded in the page config. An identical diff therefore keeps its state across renames, moves, and regenerations, while any content change starts a fresh store. Older stores for the same diff — earlier generations and this SHA-pinned key — are absorbed forward by engine merge on page load, never overwritten ([PAGE.md](PAGE.md#where-review-state-lives)).
+This is the **legacy** page key. Generated pages now file review state under `packdiff:v<schema-generation>:diff:<review_id>` (`v3` today), where `review_id` is a render-time fingerprint of the canonical reviewable diff content (repository name plus the typed file diffs — not the refs, filename, title, or timestamp), embedded in the page config. An identical diff therefore keeps its state across renames, moves, and regenerations, while any content change starts a fresh store. Older stores for the same diff — earlier generations and this SHA-pinned key — are absorbed forward by engine merge on page load, never overwritten ([PAGE.md](PAGE.md#where-review-state-lives)).

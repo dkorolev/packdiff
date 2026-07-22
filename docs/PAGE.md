@@ -101,7 +101,7 @@ If localStorage is unavailable, a visible alert warns that comments last only fo
 | --- | --- |
 | **Copy as Markdown** | The review as Markdown, grouped by file, onto the clipboard — the primary completion action. |
 | **Copy as JSON** | The lossless, re-importable review document. |
-| **Import JSON** | Merge a review in by comment id; newer `updated_at` wins. The toast reports how many comments landed and how many fell outside this diff (those appear in the unanchored section). |
+| **Import JSON** | Merge a review in — the engine's CRDT join: causally newer register wins, deletions stay deleted. The toast reports how many comments landed and how many fell outside this diff (those appear in the unanchored section). |
 | **Expand all / Collapse all** | Open or close every file panel; persisted, like per-file collapse. |
 | **Theme** | System (default, follows `prefers-color-scheme`) / Light / Dark. |
 | **Keyboard shortcuts** | Opens the shortcut reference (same as `?`). |
