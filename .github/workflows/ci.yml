@@ -9,10 +9,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install the wasm target
         run: rustup target add wasm32-unknown-unknown
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
       - name: Full test pass (fmt, debug tests, release tests, wasm ABI)
@@ -28,7 +28,7 @@ jobs:
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install the wasm target
         run: rustup target add wasm32-unknown-unknown
       - name: Package and verify-build the three crate tarballs
@@ -41,7 +41,7 @@ jobs:
   semver:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           package: packdiff-dto

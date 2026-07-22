@@ -11,7 +11,7 @@ jobs:
   version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Version ladder (PR == published + 1, published == base branch)
         env:
           BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
