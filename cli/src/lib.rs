@@ -234,23 +234,29 @@ fn notes_text_at(repo: &str, sha: &str, path: &str) -> Result<Option<String>, Er
 /// When the range has notes commits but nothing readable to lift, nothing is
 /// hidden — dropping commits without lifting anything would lose history.
 fn split_notes(
-  repo: &str, commits: Vec<packdiff_dto::diff::Commit>, notes_email: Option<&str>,
+  repo: &str, lo: &str, hi: &str, commits: Vec<packdiff_dto::diff::Commit>, notes_email: Option<&str>,
 ) -> Result<LiftedNotes, Error> {
   let unchanged = |commits| LiftedNotes { code: commits, ..LiftedNotes::default() };
-  if notes_email.is_none() {
+  if notes_email.is_none() || commits.is_empty() {
     return Ok(unchanged(commits));
   }
   // Commits arrive oldest-first (`git log --reverse`), so `notes` is too.
-  // One changed-paths call per commit: the same per-commit scan the snapshot
-  // pass already performs, and the only way to know a commit is notes.
+  // The paths are the only way to know a commit is notes, and one batched
+  // `git log` scan collects them for every single-parent commit at once.
+  let by_commit = git::changed_paths_by_commit(repo, lo, hi)?;
   let mut notes: Vec<(&packdiff_dto::diff::Commit, Vec<String>)> = Vec::new();
   // Every notes path the range touches, deduplicated and ordered by path so
   // the panels render deterministically.
   let mut notes_paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
   for c in &commits {
-    // `sha^` can fail only for a parentless commit in the range (disjoint
-    // histories in two-dot mode); such a commit is not a notes commit.
-    let touched = git::changed_paths(repo, &format!("{}^", c.sha), &c.sha).unwrap_or_default();
+    // Merge and parentless commits are absent from the batched scan and take
+    // the per-commit form instead: a merge diffs against its first parent
+    // exactly as it always did, and `sha^` failing for a parentless commit
+    // (disjoint histories in two-dot mode) still means not-a-notes-commit.
+    let touched = match by_commit.get(&c.sha) {
+      Some(paths) => paths.clone(),
+      None => git::changed_paths(repo, &format!("{}^", c.sha), &c.sha).unwrap_or_default(),
+    };
     if !touched.is_empty() && touched.iter().all(|p| is_notes_path(p)) {
       notes_paths.extend(touched.iter().cloned());
       notes.push((c, touched));
@@ -324,7 +330,7 @@ pub fn build_document(opts: &PackOptions, progress: &dyn ProgressObserver) -> Re
   progress.stage(Stage::Commits, 1);
   let commits = git::commits(&opts.repo, &lo, &head_sha)?;
   progress.step("");
-  let notes = split_notes(&opts.repo, commits, opts.notes_email.as_deref())?;
+  let notes = split_notes(&opts.repo, &lo, &head_sha, commits, opts.notes_email.as_deref())?;
   let LiftedNotes { code: commits, description, superseded_descriptions, decisions } = notes;
   // Lifted notes leave the diff entirely: their files drop out of the file
   // list (and so out of the +/− totals), and out of the snapshot paths below

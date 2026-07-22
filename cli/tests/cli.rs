@@ -774,3 +774,40 @@ fn notes_commits_lift_into_the_description_panel() {
 
   let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn notes_commits_lift_around_a_merge_commit_in_two_dot_mode() {
+  if !git_available() {
+    eprintln!("SKIP: git not found on PATH");
+    return;
+  }
+  let tmp = tmpdir("notes-merge");
+  let repo = tmp.join("sample");
+  make_repo(&repo);
+  // A merge commit inside the range: the batched changed-paths scan skips
+  // merges (git log lists no files for them), so classifying this range
+  // exercises the per-commit fallback. Merge `main` into `feature`, then a
+  // notes commit on top — two-dot mode keeps the merge in the range.
+  git(&repo, &["checkout", "-q", "feature"]);
+  git(&repo, &["merge", "-q", "--no-ff", "-m", "merge mainline", "main"]);
+  write(&repo, "PR-DESCRIPTION.md", b"# With a merge\n\nThe range carries a merge commit.\n");
+  git(&repo, &["add", "-A"]);
+  git(&repo, &["commit", "-qm", "pr notes"]);
+
+  let out = tmp.join("merge-notes.html");
+  let output = Command::new(bin())
+    .args(["main..feature", "-C", repo.to_str().unwrap(), "-o", out.to_str().unwrap()])
+    .output()
+    .unwrap();
+  assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let packed = &doc["Packed"];
+  assert_eq!(packed["description"], "PR-DESCRIPTION.md", "the notes commit lifts with a merge in the range");
+  assert_eq!(packed["notes_commits"].as_array().unwrap().len(), 1);
+  assert_eq!(packed["commits"], 3, "two code commits plus the merge stay; only the notes commit hides");
+  let html = std::fs::read_to_string(&out).unwrap();
+  assert!(html.contains("merge mainline"), "the merge commit stays on the commits table");
+  assert!(!html.contains("pr notes"), "the notes commit stays off the commits table");
+
+  let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -307,6 +307,37 @@ pub fn changed_paths(repo: &str, lo: &str, hi: &str) -> Result<Vec<String>, CliE
   Ok(out.split('\0').filter(|s| !s.is_empty()).map(str::to_string).collect())
 }
 
+/// Every single-parent commit's changed paths in `lo..hi`, keyed by sha —
+/// ONE `git log` invocation in place of one [`changed_paths`] spawn per
+/// commit, with the same per-commit semantics (`sha^..sha`, rename detection
+/// off, `-z` so `core.quotePath` never mangles a name). Each record is
+/// framed `\x01<sha>\x02<parents>\0`, then, when the commit changes
+/// anything, `\n` and the NUL-terminated names; like [`TreeReader`]'s
+/// newline exclusion, a tracked path containing those control bytes is
+/// outside what git supports on the platforms packdiff targets. Merge
+/// commits (`git log` lists no files for them) and parentless commits (it
+/// would list their entire tree, where `sha^` has nothing to diff against)
+/// are deliberately absent from the map — callers fall back to the
+/// per-commit form for exact parity. Exercised by the notes-lifting tests
+/// in `cli.rs`, merge fallback included.
+pub fn changed_paths_by_commit(
+  repo: &str, lo: &str, hi: &str,
+) -> Result<std::collections::BTreeMap<String, Vec<String>>, CliError> {
+  let range = format!("{lo}..{hi}");
+  let out = run_git(repo, &["log", "--format=%x01%H%x02%P", "--name-only", "--no-renames", "-z", &range])?;
+  let mut map = std::collections::BTreeMap::new();
+  for record in out.split('\x01').filter(|r| !r.is_empty()) {
+    let Some((header, names)) = record.split_once('\0') else { continue };
+    let Some((sha, parents)) = header.split_once('\x02') else { continue };
+    if parents.split_whitespace().count() != 1 {
+      continue;
+    }
+    let names = names.strip_prefix('\n').unwrap_or(names);
+    map.insert(sha.to_string(), names.split('\0').filter(|s| !s.is_empty()).map(str::to_string).collect());
+  }
+  Ok(map)
+}
+
 /// A long-lived `git cat-file --batch-check` channel: `<sha>:<path>` specs
 /// go in on stdin, `<oid> <type> <size>` headers come back — one process for
 /// every tree listing of a run instead of one `ls-tree` spawn per commit
