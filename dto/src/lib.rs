@@ -28,8 +28,10 @@
 //!   one deliberate opt-in to long-term compatibility (review documents live
 //!   in users' localStorage): parsers reject documents from a *newer* schema
 //!   than they understand and accept older ones. v2 (verdict + per-comment
-//!   resolution) reads v1 documents — the new fields default to absent; a v1
-//!   reader rejects v2 documents loudly, by design.
+//!   resolution) reads v1 documents — the new fields default to absent; v3
+//!   (the CRDT merge: versions, tombstones, the document clock) reads v1 and
+//!   v2 the same way; an older reader rejects newer documents loudly, by
+//!   design.
 //! - Determinism: same inputs → byte-identical outputs. Ordering is always
 //!   explicit ([`review::ReviewDocument::sort`]), timestamps and ids are
 //!   caller-supplied, and exports are stable.
@@ -43,9 +45,10 @@ pub mod snapshot;
 
 /// Version stamped into (and required of) every document this crate touches.
 /// One generation covers both document families: v2 added the review
-/// verdict and per-comment resolution; diff documents are shape-identical
-/// to v1.
-pub const SCHEMA_VERSION: u32 = 2;
+/// verdict and per-comment resolution; v3 made the review merge a CRDT
+/// (per-register versions, tombstones, the document clock). Diff documents
+/// are shape-identical across all three.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Tool identifier stamped into documents.
 pub const TOOL: &str = "packdiff";

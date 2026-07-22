@@ -318,6 +318,22 @@
   function genId() {
     return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
+  // The CRDT actor id: one per browser profile, global across reviews (the
+  // engine's merge breaks Lamport-clock ties by actor, so two machines must
+  // not share one). Generated like comment ids — entropy lives here, never
+  // in the engine — and passed with every write.
+  const ACTOR = (function () {
+    try {
+      const stored = localStorage.getItem('packdiff:actor');
+      if (stored) return stored;
+      const fresh = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      localStorage.setItem('packdiff:actor', fresh);
+      return fresh;
+    } catch (e) {
+      // Storage unavailable: a session-scoped actor still orders writes.
+      return 'a' + Math.random().toString(36).slice(2, 10);
+    }
+  })();
 
   // ---- anchoring ----
   function cssAttr(v) { return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
@@ -553,9 +569,11 @@
       // Invert the journal operation through the same engine calls that made it.
       let next;
       try {
-        if (entry.kind === 'comment_added') next = callWasm('pd_delete_comment', JSON.stringify(doc), entry.comment_id);
-        else if (entry.kind === 'verdict') next = callWasm('pd_set_verdict', JSON.stringify(doc), 'null');
-        else next = callWasm('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(entry.comment));
+        if (entry.kind === 'comment_added') next = callWasm('pd_delete_comment', JSON.stringify(doc), JSON.stringify({ id: entry.comment_id, actor: ACTOR }));
+        else if (entry.kind === 'verdict') next = callWasm('pd_set_verdict', JSON.stringify(doc), JSON.stringify({ verdict: null, actor: ACTOR }));
+        // Replaying the journaled state is still THIS browser's write: the
+        // actor is ours, not whoever authored the replayed bytes.
+        else next = callWasm('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(Object.assign({}, entry.comment, { version: { actor: ACTOR } })));
       } catch (e) {
         activity.push(entry);
         showError('Undo failed: ' + e.message);
@@ -591,7 +609,7 @@
     const target = variant === null ? null : {};
     if (target) target[variant] = { at: new Date().toISOString() };
     let next;
-    try { next = callWasm('pd_set_verdict', JSON.stringify(doc), JSON.stringify(target)); }
+    try { next = callWasm('pd_set_verdict', JSON.stringify(doc), JSON.stringify({ verdict: target, actor: ACTOR })); }
     catch (e) { showError('Verdict failed: ' + e.message); return; }
     activity = activity.filter((entry) => !entry || entry.kind !== 'verdict');
     saveActivity();
@@ -638,13 +656,18 @@
     edit.textContent = 'Edit';
     edit.addEventListener('click', () => openEditorFor(c));
     // Resolve/reopen is an ordinary engine upsert: resolved_at rides the
-    // comment, and the updated_at bump lets merges pick the newer state.
+    // comment, and the engine stamps the resolution register (content stays
+    // untouched, so a concurrent edit elsewhere survives the merge).
     const resolve = document.createElement('button');
     resolve.type = 'button';
     resolve.textContent = c.resolved_at ? 'Reopen' : 'Resolve';
     resolve.addEventListener('click', () => {
       const now = new Date().toISOString();
-      const updated = Object.assign({}, c, { updated_at: now, resolved_at: c.resolved_at ? undefined : now });
+      const updated = Object.assign({}, c, {
+        updated_at: now,
+        resolved_at: c.resolved_at ? undefined : now,
+        version: { actor: ACTOR },
+      });
       let next;
       try { next = callWasm('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(updated)); }
       catch (e) { showError((c.resolved_at ? 'Reopen' : 'Resolve') + ' failed: ' + e.message); return; }
@@ -664,7 +687,7 @@
         return;
       }
       let next;
-      try { next = callWasm('pd_delete_comment', JSON.stringify(doc), c.id); }
+      try { next = callWasm('pd_delete_comment', JSON.stringify(doc), JSON.stringify({ id: c.id, actor: ACTOR })); }
       catch (e) { showError('Delete failed: ' + e.message); return; }
       persist(next);
       removeCommentDom(c.id);
@@ -867,10 +890,10 @@
       }
       const now = new Date().toISOString();
       const comment = existing
-        ? Object.assign({}, existing, { text: text, updated_at: now })
+        ? Object.assign({}, existing, { text: text, updated_at: now, version: { actor: ACTOR } })
         : { id: genId(), file: anchor.file, side: anchor.side,
             line: Number(anchor.line), text: text,
-            created_at: now, updated_at: now };
+            created_at: now, updated_at: now, version: { actor: ACTOR } };
       let next;
       try {
         next = callWasm('pd_upsert_comment', JSON.stringify(doc), JSON.stringify(comment));

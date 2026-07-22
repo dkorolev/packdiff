@@ -117,40 +117,63 @@ pub extern "C" fn pd_upsert_comment(doc_ptr: *const u8, doc_len: u32, comment_pt
   }
 }
 
-/// Delete a comment by id (the id arrives as a plain UTF-8 string, not JSON).
-/// Returns the updated document; deleting a missing id is not an error.
+/// Delete a comment, leaving the versioned tombstone the CRDT merge needs.
+/// The request is JSON — `{"id": "…", "actor": "…"}` — because a delete is
+/// a write and every write names its actor. Returns the updated document;
+/// deleting a missing id is not an error.
 #[no_mangle]
-pub extern "C" fn pd_delete_comment(doc_ptr: *const u8, doc_len: u32, id_ptr: *const u8, id_len: u32) -> u64 {
+pub extern "C" fn pd_delete_comment(doc_ptr: *const u8, doc_len: u32, req_ptr: *const u8, req_len: u32) -> u64 {
+  #[derive(serde::Deserialize)]
+  #[serde(deny_unknown_fields)]
+  struct DeleteRequest {
+    id: String,
+    #[serde(default)]
+    actor: String,
+  }
   let mut doc = match ReviewDocument::parse(&read_arg(doc_ptr, doc_len)) {
     Ok(d) => d,
     Err(e) => return err(e),
   };
-  doc.delete(&read_arg(id_ptr, id_len));
+  let req: DeleteRequest = match serde_json::from_str(&read_arg(req_ptr, req_len)) {
+    Ok(r) => r,
+    Err(e) => return err(format!("invalid delete request: {e}")),
+  };
+  doc.delete_by(&req.id, &req.actor);
   ok(doc_value(&doc))
 }
 
-/// Set, replace, or clear the review verdict. `verdict` is either the
-/// single-key union — `{"Approved": {"at": "…"}}` / `{"ChangesRequired":
-/// {"at": "…"}}` — or the literal `null` to return the review to
-/// in-progress. Returns the updated document.
+/// Set, replace, or clear the review verdict. The request is JSON —
+/// `{"verdict": <single-key union or null>, "actor": "…"}` — where the
+/// union is `{"Approved": {"at": "…"}}` / `{"ChangesRequired": {"at":
+/// "…"}}` and `null` returns the review to in-progress; the clear is a
+/// stamped write like any other, which is what lets it merge. Returns the
+/// updated document.
 #[no_mangle]
-pub extern "C" fn pd_set_verdict(doc_ptr: *const u8, doc_len: u32, verdict_ptr: *const u8, verdict_len: u32) -> u64 {
+pub extern "C" fn pd_set_verdict(doc_ptr: *const u8, doc_len: u32, req_ptr: *const u8, req_len: u32) -> u64 {
+  #[derive(serde::Deserialize)]
+  #[serde(deny_unknown_fields)]
+  struct VerdictRequest {
+    verdict: Option<Verdict>,
+    #[serde(default)]
+    actor: String,
+  }
   let mut doc = match ReviewDocument::parse(&read_arg(doc_ptr, doc_len)) {
     Ok(d) => d,
     Err(e) => return err(e),
   };
-  let verdict: Option<Verdict> = match serde_json::from_str(&read_arg(verdict_ptr, verdict_len)) {
-    Ok(v) => v,
-    Err(e) => return err(format!("invalid verdict: {e}")),
+  let req: VerdictRequest = match serde_json::from_str(&read_arg(req_ptr, req_len)) {
+    Ok(r) => r,
+    Err(e) => return err(format!("invalid verdict request: {e}")),
   };
-  match doc.set_verdict(verdict) {
+  match doc.set_verdict_by(req.verdict, &req.actor) {
     Ok(()) => ok(doc_value(&doc)),
     Err(e) => err(e),
   }
 }
 
-/// Merge an imported document into the current one (union by id, newer
-/// `updated_at` wins). Returns the merged document.
+/// Merge an imported document into the current one — the CRDT join:
+/// commutative, associative, idempotent; registers decide by Lamport
+/// version, tombstones keep deletions deleted. Returns the merged document.
 #[no_mangle]
 pub extern "C" fn pd_merge(doc_ptr: *const u8, doc_len: u32, incoming_ptr: *const u8, incoming_len: u32) -> u64 {
   let mut doc = match ReviewDocument::parse(&read_arg(doc_ptr, doc_len)) {
