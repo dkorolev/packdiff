@@ -18,7 +18,7 @@ All symlinks point at this directory so one edit updates every host.
 
 | Skill | Purpose |
 | --- | --- |
-| [packdiff-pr](packdiff-pr/SKILL.md) | Pack a real GitHub pull request into one offline packdiff HTML page, baking the PR's description in as the `PR-DESCRIPTION.md` notes commit |
+| [packdiff-pr](packdiff-pr/SKILL.md) | Pack a real GitHub pull request into one offline packdiff HTML page, baking the PR's description in as the `PR-DESCRIPTION.md` notes commit and shipping the PR's review discussion beside it as `review.json` (Import JSON) + `discussion.md` (agents and humans) |
 
 ## Adding a skill
 
