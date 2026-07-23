@@ -69,5 +69,5 @@ Please follow the shared [engineering principles](https://github.com/dkorolev/pr
 
 ## Deferred deliberately
 
-- Upstream synchronization, CRDT merging, file filters, next-unviewed navigation, repository-authored collapsed-first defaults, and rich commit metadata placement remain TODOs.
+- Upstream synchronization, file filters, next-unviewed navigation, repository-authored collapsed-first defaults, and rich commit metadata placement remain TODOs.
 - If filtering is added, it must execute instantly in the local JavaScript/WASM player. There is no filtering UI in the current packdiff scope.

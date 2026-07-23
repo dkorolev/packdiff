@@ -33,6 +33,7 @@ Open `review.html` anywhere — from disk (`file://`), over any static host, or 
 - **A PR description panel, and journaled decisions**: a commit that touches nothing but `PR-DESCRIPTION.md` is notes, not code, whoever authored it — it is hidden from the page, and the file renders as a commentable **Description** panel on top, like the pull request it will become. `PR-DECISION-<topic>.md` files lift the same way into a **Decisions** section below it: what was decided while the change was made, and why, commentable alongside the code. Write the description in more than one commit and the page says so in a standing banner, then shows every version — newest first, each commentable on its own.
 - **Live progress**: a progress bar with ETA at a terminal; in machine mode one `{ "Progress": ... }` JSON line per second on stderr, ending with `Done` — agents always know the stage and what remains.
 - **Script- and agent-native**: piped stdout automatically switches to machine mode — exactly one two-space JSON document per run, success and failure alike, as single-key unions (`{ "Packed": { … } }`, `{ "UnknownRef": { … } }`) — plus `--dump-json` for the full typed diff document and a documented exit-code table (`packdiff help exitcodes`).
+- **A `packdiff-pr` agent skill ships in-repo**: point a coding agent at a GitHub pull request and it packs the whole PR into one offline page — cloning into a temporary directory, baking the PR's GitHub description in as the notes commit so the Description panel survives offline, and cleaning up after itself. [`.skills/`](.skills/README.md) is the canonical skill source, symlinked into Claude Code, Cursor, Codex, and OpenCode discovery paths.
 
 ## How it works
 
@@ -64,7 +65,7 @@ Straight from this repository:
 ```console
 $ cargo install --git https://github.com/dkorolev/packdiff packdiff
 $ packdiff --version
-packdiff 0.4.1
+packdiff 0.8.1
 ```
 
 From crates.io:
@@ -130,7 +131,7 @@ std::fs::write("review.html", &out.html)?;
 
 ```toml
 [dependencies]
-packdiff = { version = "0.4", default-features = false }
+packdiff = { version = "0.8", default-features = false }
 ```
 
 `default-features = false` drops the binary-only terminal machinery (`indicatif`). The build-time wasm prerequisite above still applies, and `git` must be on `PATH` at run time. The typed data model is re-exported as `packdiff::dto`; progress can be observed by implementing `packdiff::progress::ProgressObserver` (`&()` observes nothing). `cargo run --example pack -- main` runs the [worked example](cli/examples/pack.rs), and consumers that only read packdiff's artifacts — exported comments, `--dump-json` documents — need just the pure-logic [`packdiff-dto`](dto/) crate.
