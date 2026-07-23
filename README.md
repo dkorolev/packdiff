@@ -65,7 +65,7 @@ Straight from this repository:
 ```console
 $ cargo install --git https://github.com/dkorolev/packdiff packdiff
 $ packdiff --version
-packdiff 0.8.1
+packdiff 0.9.0
 ```
 
 From crates.io:
@@ -131,7 +131,7 @@ std::fs::write("review.html", &out.html)?;
 
 ```toml
 [dependencies]
-packdiff = { version = "0.8", default-features = false }
+packdiff = { version = "0.9", default-features = false }
 ```
 
 `default-features = false` drops the binary-only terminal machinery (`indicatif`). The build-time wasm prerequisite above still applies, and `git` must be on `PATH` at run time. The typed data model is re-exported as `packdiff::dto`; progress can be observed by implementing `packdiff::progress::ProgressObserver` (`&()` observes nothing). `cargo run --example pack -- main` runs the [worked example](cli/examples/pack.rs), and consumers that only read packdiff's artifacts — exported comments, `--dump-json` documents — need just the pure-logic [`packdiff-dto`](dto/) crate.
