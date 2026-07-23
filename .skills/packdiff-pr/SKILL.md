@@ -1,6 +1,6 @@
 ---
 name: packdiff-pr
-description: Generates a self-contained packdiff HTML review page from a real GitHub pull request. Confirms `gh` is installed and authenticated first, clones the PR's repository into a temporary directory, fetches the PR head, commits the PR's GitHub description as the fake `PR-DESCRIPTION.md` notes commit so the offline page carries the Description panel, then runs `packdiff` with PR (merge-base) semantics and cleans the clone up. Use when the user invokes packdiff-pr, /packdiff-pr, or asks to turn a GitHub PR or PR URL into a packdiff page.
+description: Generates a self-contained packdiff HTML review page from a real GitHub pull request, plus the PR's review discussion as two sidecar files. Confirms `gh` is installed and authenticated first, clones the PR's repository into a temporary directory, fetches the PR head, commits the PR's GitHub description as the fake `PR-DESCRIPTION.md` notes commit so the offline page carries the Description panel, runs `packdiff` with PR (merge-base) semantics, then fetches the PR's review threads, reviews, and conversation and maps them through map-discussion.mjs into review.json (for the page's Import JSON) and discussion.md (for agents and humans), and cleans the clone up. Use when the user invokes packdiff-pr, /packdiff-pr, or asks to turn a GitHub PR or PR URL into a packdiff page.
 ---
 
 # packdiff-pr — pack a real GitHub pull request into one offline HTML page
@@ -11,6 +11,11 @@ on GitHub, not in the repository. That is what the fake notes commit in step 4
 is for: packdiff lifts a commit touching nothing but `PR-DESCRIPTION.md` into a
 commentable **Description** panel and hides it from the commit list (see
 [docs/CLI.md](../../docs/CLI.md), "The notes-commit convention").
+
+The PR's review discussion comes along too (step 6): two sidecar files beside
+the page — `review.json`, which Import JSON merges into the page as real
+anchored comments, and `discussion.md`, the whole discussion for agents and
+humans.
 
 Follow the steps in order. Every step that can fail tells you how to stop.
 
@@ -38,7 +43,7 @@ Fetch the metadata once and keep it:
 
 ```sh
 gh pr view <N-or-URL> --repo OWNER/REPO \
-  --json number,title,body,state,isDraft,baseRefName,headRefName,url
+  --json number,title,body,state,isDraft,baseRefName,headRefName,url,reviewDecision
 ```
 
 Any state works — open, draft, closed, or merged; `pull/N/head` stays
@@ -103,7 +108,85 @@ Piped stdout puts packdiff in machine mode: capture the one JSON document and
 branch on its top-level key (`Packed` on success; on failure the variant's
 `message` says what went wrong).
 
-## 6. Verify, report, clean up
+## 6. Import the review discussion — two sidecar files
+
+The page now exists, but GitHub still holds the other half of the PR: the
+review threads, the reviews, and the conversation. Ship them beside the page
+as two files, both named after the page:
+
+- `packdiff-OWNER-REPO-pr-N.review.json` — a schema v3 `ReviewDocument`. The
+  user imports it via **Actions → Import JSON**; every line-anchored review
+  thread lands as real comments at its `file:line` anchor, merged by the CRDT
+  (resolved threads arrive resolved; re-importing after new discussion
+  upserts instead of duplicating; local edits are never clobbered).
+- `packdiff-OWNER-REPO-pr-N.discussion.md` — the whole discussion in one
+  markdown file for agents and humans: reviews with their verdicts, the
+  conversation tab, and every thread including outdated ones.
+
+Fetch three datasets (paginate — big PRs overflow single pages):
+
+```sh
+gh api graphql --paginate --slurp \
+  -F owner=OWNER -F repo=REPO -F number=N -f query='
+  query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 50, after: $endCursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            isResolved isOutdated path line originalLine diffSide
+            comments(first: 100) {
+              nodes { databaseId url body createdAt lastEditedAt
+                      author { login } } } } } } } }' > "$TMP/raw-threads.json"
+gh api --paginate "repos/OWNER/REPO/pulls/N/reviews" --slurp > "$TMP/raw-reviews.json"
+gh api --paginate "repos/OWNER/REPO/issues/N/comments" --slurp > "$TMP/raw-conversation.json"
+```
+
+Assemble the bundle programmatically (a small script or `jq` — never shell
+string-splicing; bodies contain quotes and backticks):
+
+```sh
+jq -n \
+  --slurpfile threads "$TMP/raw-threads.json" \
+  --slurpfile reviews "$TMP/raw-reviews.json" \
+  --slurpfile conversation "$TMP/raw-conversation.json" \
+  --argjson pr "$PR_META" '{
+    pr: $pr,
+    threads: [$threads[0][].data.repository.pullRequest.reviewThreads.nodes[]],
+    reviews: [$reviews[0][][]],
+    conversation: [$conversation[0][][]]
+  }' > "$TMP/bundle.json"
+```
+
+`$PR_META` is `{ number, title, url, state, reviewDecision, repo, base:
+{ name, sha }, head: { name, sha } }` — number/title/url/state/reviewDecision
+from the step-2 `gh pr view` call (add `reviewDecision` to its `--json` list),
+`repo` the repository name, and the SHAs from the clone:
+`git -C "$TMP/pr-clone" rev-parse "origin/BASE_REF"` and `… rev-parse
+"packdiff-pr-N"`.
+
+Then map — the transform lives beside this skill and prints a machine-mode
+summary:
+
+```sh
+node "$SKILL_DIR/map-discussion.mjs" "$TMP/bundle.json" \
+  "packdiff-OWNER-REPO-pr-N.review.json" "packdiff-OWNER-REPO-pr-N.discussion.md"
+```
+
+Mapping rules the script implements (documented in its header): comment ids
+are `github-rc-<databaseId>` so re-imports upsert; actors are
+`github:<login>`; `isResolved` becomes `resolved_at`; an outdated thread
+anchors to its original line and the page shows it in the "outside this diff"
+section; **the PR's `reviewDecision` becomes the document verdict** —
+`APPROVED` → Approved, `CHANGES_REQUESTED` → Require changes, stamped at the
+newest review carrying that state, anything else leaves the verdict unset.
+Review summaries and conversation comments have no diff anchor, so they are
+in `discussion.md` only.
+
+If all three datasets are empty (a PR with no discussion), skip the sidecar
+files and say so in the report rather than shipping empty artifacts.
+
+## 7. Verify, report, clean up
 
 - In the `Packed` document, confirm `description` is `"PR-DESCRIPTION.md"` and
   `notes_commits` is non-empty — that is the proof the description panel made
@@ -112,6 +195,13 @@ branch on its top-level key (`Packed` on success; on failure the variant's
   rather than shipping a page without its description.
 - Report the output path plus the `files` / `additions` / `deletions` /
   `commits` counts and the PR state, and surface any `warnings`.
-- Delete the temporary clone (`rm -rf "$TMP/pr-clone"`). The HTML page is
-  self-contained; nothing else needs to survive.
+- Report the two sidecar files with the `Mapped` counts from
+  map-discussion.mjs (threads, comments, reviews, conversation, verdict), and
+  tell the user the one click that remains: **Actions → Import JSON** on the
+  page, pointing at the `review.json`. If `fallback_anchored` is non-zero,
+  say that many threads are outdated on GitHub and will appear in the page's
+  "outside this diff" section.
+- Delete the temporary clone (`rm -rf "$TMP/pr-clone"`) and the raw/bundle
+  JSON intermediates. The page and its two sidecars are the only artifacts
+  that survive.
 - Offer to open the page (`open` / `xdg-open`) — do not open it unasked.
