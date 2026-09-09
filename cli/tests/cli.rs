@@ -10,12 +10,25 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// A command with git's own environment scrubbed. Under a git hook (the pre-push gate runs
+/// this suite) git exports GIT_DIR and friends to point at the repository being pushed;
+/// a `git init` in a temp dir that inherited them would re-initialize THAT repository —
+/// observed once: a worktree push turned the main clone bare and committed fixtures onto
+/// its main. Every git and packdiff invocation in these tests goes through here.
+fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+  let mut cmd = Command::new(program);
+  for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+    cmd.env_remove(var);
+  }
+  cmd
+}
+
 fn git_available() -> bool {
-  Command::new("git").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+  command("git").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 fn git(repo: &Path, args: &[&str]) {
-  let status = Command::new("git")
+  let status = command("git")
     .arg("-C")
     .arg(repo)
     .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
@@ -84,7 +97,7 @@ fn end_to_end() {
   let dump = tmp.join("doc.json");
 
   // Piped stdout = machine mode: exactly one single-key `Packed` document.
-  let output = Command::new(bin())
+  let output = command(bin())
     .args([
       "main",
       "feature",
@@ -224,7 +237,7 @@ fn two_dot_mode_sees_mainline_drift() {
   let tmp = tmpdir("twodot");
   let repo = tmp.join("sample");
   make_repo(&repo);
-  let output = Command::new(bin())
+  let output = command(bin())
     .args(["main", "feature", "-C", repo.to_str().unwrap(), "-o", "-", "--no-merge-base"])
     .output()
     .unwrap();
@@ -247,7 +260,7 @@ fn error_documents_and_exit_codes() {
   make_repo(&repo);
 
   // Unknown ref → exit 4 and a single-key `UnknownRef` document with stage.
-  let output = Command::new(bin()).args(["main", "no-such-branch", "-C", repo.to_str().unwrap()]).output().unwrap();
+  let output = command(bin()).args(["main", "no-such-branch", "-C", repo.to_str().unwrap()]).output().unwrap();
   assert_eq!(output.status.code(), Some(4));
   let err: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
   assert_eq!(err["UnknownRef"]["stage"], "ref");
@@ -257,20 +270,20 @@ fn error_documents_and_exit_codes() {
   // Not a repo → exit 3, `NotAGitRepository`.
   let empty = tmp.join("not-a-repo");
   std::fs::create_dir_all(&empty).unwrap();
-  let output = Command::new(bin()).args(["main", "feature", "-C", empty.to_str().unwrap()]).output().unwrap();
+  let output = command(bin()).args(["main", "feature", "-C", empty.to_str().unwrap()]).output().unwrap();
   assert_eq!(output.status.code(), Some(3));
   let err: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
   assert_eq!(err["NotAGitRepository"]["stage"], "repo");
 
   // Usage errors → exit 2, `UsageError` documents.
-  let output = Command::new(bin()).args(["--bogus-flag"]).output().unwrap();
+  let output = command(bin()).args(["--bogus-flag"]).output().unwrap();
   assert_eq!(output.status.code(), Some(2));
   let err: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
   assert_eq!(err["UsageError"]["stage"], "usage");
-  let output = Command::new(bin()).args(["a", "b", "c"]).output().unwrap();
+  let output = command(bin()).args(["a", "b", "c"]).output().unwrap();
   assert_eq!(output.status.code(), Some(2));
   // `--json` and `-o -` both claim stdout.
-  let output = Command::new(bin()).args(["main", "feature", "--json", "-o", "-"]).output().unwrap();
+  let output = command(bin()).args(["main", "feature", "--json", "-o", "-"]).output().unwrap();
   assert_eq!(output.status.code(), Some(2));
 
   let _ = std::fs::remove_dir_all(&tmp);
@@ -280,7 +293,7 @@ fn error_documents_and_exit_codes() {
 fn machine_mode_refuses_non_canonical_invocations() {
   // Piped stdout = machine mode: `--no-color` must be refused with the
   // canonical form told back, as a single-key document, exit 2.
-  let output = Command::new(bin()).args(["main", "--no-color"]).output().unwrap();
+  let output = command(bin()).args(["main", "--no-color"]).output().unwrap();
   assert_eq!(output.status.code(), Some(2));
   let err: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
   assert_eq!(err["NonCanonicalInvocation"]["given"], "--no-color");
@@ -291,7 +304,7 @@ fn machine_mode_refuses_non_canonical_invocations() {
 #[test]
 fn help_is_comprehensive_and_free() {
   // No arguments → comprehensive help on stdout, exit 0.
-  let output = Command::new(bin()).output().unwrap();
+  let output = command(bin()).output().unwrap();
   assert_eq!(output.status.code(), Some(0));
   let text = String::from_utf8_lossy(&output.stdout);
   assert!(text.contains("USAGE:"));
@@ -315,7 +328,7 @@ fn help_is_comprehensive_and_free() {
   }
 
   // `help exitcodes` prints the complete table.
-  let output = Command::new(bin()).args(["help", "exitcodes"]).output().unwrap();
+  let output = command(bin()).args(["help", "exitcodes"]).output().unwrap();
   assert_eq!(output.status.code(), Some(0));
   let text = String::from_utf8_lossy(&output.stdout);
   for code in ["0", "2", "3", "4", "5", "130"] {
@@ -325,7 +338,7 @@ fn help_is_comprehensive_and_free() {
 
   // `--help` and `-h` also work.
   for flag in ["--help", "-h"] {
-    let output = Command::new(bin()).args([flag]).output().unwrap();
+    let output = command(bin()).args([flag]).output().unwrap();
     assert_eq!(output.status.code(), Some(0), "{flag}");
   }
 }
@@ -341,24 +354,22 @@ fn range_syntax_and_head_default() {
   make_repo(&repo);
 
   // `main...feature` = merge-base semantics: mainline drift excluded.
-  let output = Command::new(bin()).args(["main...feature", "-C", repo.to_str().unwrap(), "-o", "-"]).output().unwrap();
+  let output = command(bin()).args(["main...feature", "-C", repo.to_str().unwrap(), "-o", "-"]).output().unwrap();
   assert!(output.status.success());
   let html = String::from_utf8_lossy(&output.stdout);
   assert!(html.contains("newfile.md"));
   assert!(!html.contains("mainline.txt"));
 
   // `main..feature` = literal two-dot: drift included as a reverse change.
-  let output = Command::new(bin()).args(["main..feature", "-C", repo.to_str().unwrap(), "-o", "-"]).output().unwrap();
+  let output = command(bin()).args(["main..feature", "-C", repo.to_str().unwrap(), "-o", "-"]).output().unwrap();
   assert!(output.status.success());
   assert!(String::from_utf8_lossy(&output.stdout).contains("mainline.txt"));
 
   // Single ref: HEAD defaults to the current checkout.
   git(&repo, &["checkout", "-q", "feature"]);
   let out_file = tmp.join("head-default.html");
-  let output = Command::new(bin())
-    .args(["main", "-C", repo.to_str().unwrap(), "-o", out_file.to_str().unwrap()])
-    .output()
-    .unwrap();
+  let output =
+    command(bin()).args(["main", "-C", repo.to_str().unwrap(), "-o", out_file.to_str().unwrap()]).output().unwrap();
   assert!(output.status.success());
   let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
   assert_eq!(doc["Packed"]["head"]["name"], "HEAD");
@@ -380,7 +391,7 @@ fn head_refs_resolve_with_carets_and_case_insensitively() {
 
   // `HEAD^` as BASE: exactly the last commit of `feature` is in range.
   for base in ["HEAD^", "head^", "Head^"] {
-    let output = Command::new(bin()).args([base, "-C", repo.to_str().unwrap(), "-o", "-"]).output().unwrap();
+    let output = command(bin()).args([base, "-C", repo.to_str().unwrap(), "-o", "-"]).output().unwrap();
     assert!(output.status.success(), "{base}: {}", String::from_utf8_lossy(&output.stderr));
     let html = String::from_utf8_lossy(&output.stdout);
     assert!(html.contains("newfile.md"), "{base} spans the last feature commit");
@@ -393,7 +404,7 @@ fn head_refs_resolve_with_carets_and_case_insensitively() {
 
   // Deep caret chains work too: `head^^` == the merge base here, so the diff
   // covers both feature commits.
-  let output = Command::new(bin()).args(["head^^", "-C", repo.to_str().unwrap(), "-o", "-"]).output().unwrap();
+  let output = command(bin()).args(["head^^", "-C", repo.to_str().unwrap(), "-o", "-"]).output().unwrap();
   assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
   let html = String::from_utf8_lossy(&output.stdout);
   assert!(html.contains("feature change one") && html.contains("feature change two"));
@@ -411,7 +422,7 @@ fn machine_mode_streams_progress_on_stderr() {
   let repo = tmp.join("sample");
   make_repo(&repo);
   let out = tmp.join("diff.html");
-  let output = Command::new(bin())
+  let output = command(bin())
     .args(["main", "feature", "-C", repo.to_str().unwrap(), "-o", out.to_str().unwrap()])
     .output()
     .unwrap();
@@ -454,7 +465,7 @@ fn machine_mode_streams_progress_on_stderr() {
   assert!(doc.get("Packed").is_some());
 
   // A failing run must NOT report `Done`.
-  let output = Command::new(bin()).args(["main", "no-such-branch", "-C", repo.to_str().unwrap()]).output().unwrap();
+  let output = command(bin()).args(["main", "no-such-branch", "-C", repo.to_str().unwrap()]).output().unwrap();
   assert_eq!(output.status.code(), Some(4));
   let stderr = String::from_utf8_lossy(&output.stderr);
   assert!(!stderr.contains("\"Done\""), "error path leaked a Done report: {stderr}");
@@ -473,7 +484,7 @@ fn default_output_filename() {
   make_repo(&repo);
 
   let output =
-    Command::new(bin()).current_dir(&tmp).args(["main", "feature", "-C", repo.to_str().unwrap()]).output().unwrap();
+    command(bin()).current_dir(&tmp).args(["main", "feature", "-C", repo.to_str().unwrap()]).output().unwrap();
   assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
   let expected = tmp.join("packdiff-main-feature.html");
   assert!(expected.is_file(), "default filename derives from the refs");
@@ -483,11 +494,8 @@ fn default_output_filename() {
   assert!(!String::from_utf8_lossy(&output.stdout).contains('\u{1b}'));
 
   // Slashes in ref names sanitize.
-  let output = Command::new(bin())
-    .current_dir(&tmp)
-    .args(["heads/main", "feature", "-C", repo.to_str().unwrap()])
-    .output()
-    .unwrap();
+  let output =
+    command(bin()).current_dir(&tmp).args(["heads/main", "feature", "-C", repo.to_str().unwrap()]).output().unwrap();
   assert!(output.status.success());
   assert!(tmp.join("packdiff-heads-main-feature.html").is_file());
 
@@ -524,7 +532,7 @@ fn notes_commits_lift_journaled_decisions_into_their_own_panels() {
 
   let out = tmp.join("decisions.html");
   let dump = tmp.join("decisions.json");
-  let output = Command::new(bin())
+  let output = command(bin())
     .env("PACKDIFF_SYSTEM_USER_EMAIL", "notes-bot@example.com")
     .args([
       "main",
@@ -593,7 +601,7 @@ fn several_description_commits_are_flagged_and_all_versions_stay_commentable() {
 
   let out = tmp.join("multidesc.html");
   let dump = tmp.join("multidesc.json");
-  let output = Command::new(bin())
+  let output = command(bin())
     .args([
       "main",
       "feature",
@@ -682,7 +690,7 @@ fn notes_commits_lift_into_the_description_panel() {
   // The commit hides, the file lifts.
   let out = tmp.join("with-notes.html");
   let dump = tmp.join("with-notes.json");
-  let output = Command::new(bin())
+  let output = command(bin())
     .env("PACKDIFF_SYSTEM_USER_EMAIL", "notes-bot@example.com")
     .args([
       "main",
@@ -741,7 +749,7 @@ fn notes_commits_lift_into_the_description_panel() {
   // same commit still lifts: it is confined to the description, and a
   // description is metadata about the change whoever signed it.
   let any_author_out = tmp.join("any-author.html");
-  let output = Command::new(bin())
+  let output = command(bin())
     .env_remove("PACKDIFF_SYSTEM_USER_EMAIL")
     .args(["main", "feature", "-C", repo.to_str().unwrap(), "-o", any_author_out.to_str().unwrap()])
     .output()
@@ -758,7 +766,7 @@ fn notes_commits_lift_into_the_description_panel() {
   // An EMPTY notes email is the kill switch: the convention is off, so the
   // commit and the file are ordinary code again.
   let plain_out = tmp.join("plain.html");
-  let output = Command::new(bin())
+  let output = command(bin())
     .env("PACKDIFF_SYSTEM_USER_EMAIL", "")
     .args(["main", "feature", "-C", repo.to_str().unwrap(), "-o", plain_out.to_str().unwrap()])
     .output()
@@ -795,10 +803,8 @@ fn notes_commits_lift_around_a_merge_commit_in_two_dot_mode() {
   git(&repo, &["commit", "-qm", "pr notes"]);
 
   let out = tmp.join("merge-notes.html");
-  let output = Command::new(bin())
-    .args(["main..feature", "-C", repo.to_str().unwrap(), "-o", out.to_str().unwrap()])
-    .output()
-    .unwrap();
+  let output =
+    command(bin()).args(["main..feature", "-C", repo.to_str().unwrap(), "-o", out.to_str().unwrap()]).output().unwrap();
   assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
   let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
   let packed = &doc["Packed"];

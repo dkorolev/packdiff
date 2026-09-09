@@ -4,6 +4,12 @@
 # Enable with:  git config core.hooksPath .githooks
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+# git hands a hook its own repository through GIT_DIR and friends. The suite below
+# creates throwaway repositories of its own; inheriting these would point every one of
+# them at the repository being pushed (a worktree push once re-initialized the main
+# clone and committed test fixtures onto its main). The tests scrub them too; this is
+# the belt to that suspenders.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
 
 # A push that only DELETES refs ships no code, so there is nothing to test.
 # git names each ref on stdin as "<local ref> <local sha> <remote ref>
