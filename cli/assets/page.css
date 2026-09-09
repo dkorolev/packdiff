@@ -1082,6 +1082,19 @@ tr.comment-row td, tr.editor-row td {
   padding: 2px 12px;
   color: var(--muted);
 }
+.md-preview table, .comment-body table, .editor-preview table {
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 0.95em;
+}
+.md-preview th, .md-preview td,
+.comment-body th, .comment-body td,
+.editor-preview th, .editor-preview td {
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  vertical-align: top;
+}
+.md-preview th, .comment-body th, .editor-preview th { font-weight: 600; }
 .md-preview ul, .md-preview ol,
 .comment-body ul, .comment-body ol,
 .editor-preview ul, .editor-preview ol {

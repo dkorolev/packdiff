@@ -7,7 +7,7 @@
 //! cannot smuggle markup or `javascript:` URLs.
 //!
 //! Deliberately a SUBSET (documented in docs/PAGE.md): ATX headings, fenced
-//! code blocks, nested lists, blockquotes, thematic breaks,
+//! code blocks, nested lists, blockquotes, thematic breaks, pipe tables,
 //! paragraphs; inline `` `code` ``, `**bold**`, `*italic*`, and
 //! `[links](https://…)`. Underscores are NOT emphasis, so `snake_case`
 //! identifiers survive verbatim. A single newline inside a paragraph is a
@@ -140,17 +140,131 @@ fn one_block(lines: &[&str], start: usize, depth: u32) -> (usize, String) {
   if list_item(lines[i]).is_some() {
     return list_block(lines, i, depth);
   }
+  if table_starts_at(lines, i) {
+    return table_block(lines, i, depth);
+  }
   // Paragraph: consecutive plain lines; each single newline is a hard break.
   let mut parts: Vec<String> = Vec::new();
   while i < lines.len() {
     let t = lines[i].trim_start();
-    if t.is_empty() || starts_block(t) {
+    if t.is_empty() || starts_block(t) || table_starts_at(lines, i) {
       break;
     }
     parts.push(inline(lines[i].trim_end(), depth));
     i += 1;
   }
   (i, format!("<p>{}</p>", parts.join("<br>")))
+}
+
+/// A pipe table starts where a row of cells is followed by its delimiter row
+/// (`|---|:--:|`) with the same number of cells. Nothing else looks like one,
+/// so a lone `a | b` line stays a paragraph.
+fn table_starts_at(lines: &[&str], i: usize) -> bool {
+  let Some(delimiter) = lines.get(i + 1) else { return false };
+  if !lines[i].contains('|') {
+    return false;
+  }
+  let header = table_cells(lines[i]);
+  let aligns = table_alignments(delimiter);
+  !header.is_empty() && aligns.len() == header.len()
+}
+
+/// Column alignment from a delimiter row: `:--` left, `--:` right, `:-:`
+/// center, `---` unset. `None` when the row is not a delimiter row.
+fn table_alignments(line: &str) -> Vec<Option<&'static str>> {
+  if !line.contains('|') && !line.trim().contains('-') {
+    return Vec::new();
+  }
+  let cells = table_cells(line);
+  let mut out = Vec::with_capacity(cells.len());
+  for cell in &cells {
+    let c = cell.trim();
+    let left = c.starts_with(':');
+    let right = c.ends_with(':');
+    let dashes = c.trim_start_matches(':').trim_end_matches(':');
+    if dashes.is_empty() || !dashes.chars().all(|ch| ch == '-') {
+      return Vec::new();
+    }
+    out.push(match (left, right) {
+      (true, true) => Some("center"),
+      (true, false) => Some("left"),
+      (false, true) => Some("right"),
+      (false, false) => None,
+    });
+  }
+  out
+}
+
+/// The cells of one table row: split on pipes that are neither escaped
+/// (`\|`) nor inside backticks, with the optional leading and trailing pipe
+/// dropped and each cell trimmed.
+fn table_cells(line: &str) -> Vec<String> {
+  let trimmed = line.trim();
+  let mut cells = Vec::new();
+  let mut cell = String::new();
+  let mut in_code = false;
+  let mut chars = trimmed.chars().peekable();
+  while let Some(ch) = chars.next() {
+    match ch {
+      '\\' if chars.peek() == Some(&'|') => {
+        chars.next();
+        cell.push('|');
+      }
+      '`' => {
+        in_code = !in_code;
+        cell.push(ch);
+      }
+      '|' if !in_code => cells.push(std::mem::take(&mut cell)),
+      _ => cell.push(ch),
+    }
+  }
+  cells.push(cell);
+  if trimmed.starts_with('|') {
+    cells.remove(0);
+  }
+  if trimmed.ends_with('|') && !trimmed.ends_with("\\|") && cells.len() > 1 {
+    cells.pop();
+  }
+  cells.into_iter().map(|c| c.trim().to_string()).collect()
+}
+
+/// Render the table starting at `lines[start]` (its header row). Body rows
+/// run until a blank line or a line without a pipe; short rows are padded,
+/// long rows cut, to the header's width, as GitHub does.
+fn table_block(lines: &[&str], start: usize, depth: u32) -> (usize, String) {
+  let header = table_cells(lines[start]);
+  let aligns = table_alignments(lines[start + 1]);
+  let width = header.len();
+  let cell_html = |tag: &str, text: &str, align: Option<&str>| {
+    let style = align.map(|a| format!(" style=\"text-align:{a}\"")).unwrap_or_default();
+    format!("<{tag}{style}>{}</{tag}>", inline(text, depth))
+  };
+  let mut html = String::from("<table><thead><tr>");
+  for (cell, align) in header.iter().zip(&aligns) {
+    html.push_str(&cell_html("th", cell, *align));
+  }
+  html.push_str("</tr></thead>");
+  let mut i = start + 2;
+  let mut body = String::new();
+  while i < lines.len() {
+    let line = lines[i];
+    if line.trim().is_empty() || !line.contains('|') {
+      break;
+    }
+    let mut cells = table_cells(line);
+    cells.resize(width, String::new());
+    body.push_str("<tr>");
+    for (cell, align) in cells.iter().zip(&aligns) {
+      body.push_str(&cell_html("td", cell, *align));
+    }
+    body.push_str("</tr>");
+    i += 1;
+  }
+  if !body.is_empty() {
+    html.push_str(&format!("<tbody>{body}</tbody>"));
+  }
+  html.push_str("</table>");
+  (i, html)
 }
 
 /// True when the line begins some non-paragraph block, ending a paragraph.
@@ -465,5 +579,37 @@ mod tests {
       let joined: String = to_html_blocks(text).into_iter().map(|(_, h)| h).collect();
       assert_eq!(joined, to_html(text), "for input {text:?}");
     }
+  }
+
+  #[test]
+  fn pipe_tables_render_with_alignment_padding_and_escaped_cells() {
+    let md = "Coverage:\n| Behavior | Coverage | Note |\n|:---|:-:|--:|\n| `a \\| b` | unit ✓ |\n| <b>x</b> | **none** | extra | dropped |\n\nAfter.";
+    let html = to_html(md);
+    assert_eq!(
+      html,
+      "<p>Coverage:</p>\
+<table><thead><tr><th style=\"text-align:left\">Behavior</th><th style=\"text-align:center\">Coverage</th><th style=\"text-align:right\">Note</th></tr></thead>\
+<tbody><tr><td style=\"text-align:left\"><code>a | b</code></td><td style=\"text-align:center\">unit ✓</td><td style=\"text-align:right\"></td></tr>\
+<tr><td style=\"text-align:left\">&lt;b&gt;x&lt;/b&gt;</td><td style=\"text-align:center\"><strong>none</strong></td><td style=\"text-align:right\">extra</td></tr></tbody></table>\
+<p>After.</p>"
+    );
+  }
+
+  #[test]
+  fn a_table_needs_its_delimiter_row_and_ends_where_the_pipes_do() {
+    assert_eq!(to_html("a | b\nc | d"), "<p>a | b<br>c | d</p>", "no delimiter row: a paragraph");
+    assert_eq!(to_html("| a | b |\n|---|"), "<p>| a | b |<br>|---|</p>", "width mismatch: a paragraph");
+    assert_eq!(
+      to_html("| a |\n|---|"),
+      "<table><thead><tr><th>a</th></tr></thead></table>",
+      "a header alone is a table"
+    );
+    assert_eq!(
+      to_html("| a |\n|---|\n| 1 |\nplain\n| 2 |"),
+      "<table><thead><tr><th>a</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table><p>plain<br>| 2 |</p>"
+    );
+    // A table's blocks anchor to their own source line, like every other block.
+    let blocks = to_html_blocks("intro\n\n| a |\n|---|\n| 1 |\n\ntail");
+    assert_eq!(blocks.iter().map(|(line, _)| *line).collect::<Vec<_>>(), vec![0, 2, 6]);
   }
 }

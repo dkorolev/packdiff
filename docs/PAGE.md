@@ -77,7 +77,7 @@ Markdown appears in three places, all rendered by `packdiff-dto::markdown` (buil
 - **Markdown files** — open in the **Rendered** view, built from the diff hunks (added runs tinted green, removed red); the **Rendered | Source** pill switches to the diff. The choice persists per file.
 - **The Description and Decision panels** — **Rendered | Source**, both commentable (rendered blocks anchor to the source line they start at); each panel remembers its own view.
 
-The dialect is deliberately a subset: ATX headings, fenced code blocks, nested ordered and unordered lists, blockquotes, thematic breaks, paragraphs; inline `` `code` ``, `**bold**`, `*italic*`, and `[links](https://…)` (`http` / `https` / `mailto` targets only). Underscores are NOT emphasis, so `snake_case` identifiers survive verbatim. A single newline inside a paragraph is a hard break, matching how people write review comments. Every input character is HTML-escaped first — hostile input cannot smuggle markup or `javascript:` URLs.
+The dialect is deliberately a subset: ATX headings, fenced code blocks, nested ordered and unordered lists, blockquotes, thematic breaks, pipe tables (a header row over a `|---|:--:|` delimiter row; `\|` for a literal pipe), paragraphs; inline `` `code` ``, `**bold**`, `*italic*`, and `[links](https://…)` (`http` / `https` / `mailto` targets only). Underscores are NOT emphasis, so `snake_case` identifiers survive verbatim. A single newline inside a paragraph is a hard break, matching how people write review comments. Every input character is HTML-escaped first — hostile input cannot smuggle markup or `javascript:` URLs.
 
 ## Where review state lives
 
