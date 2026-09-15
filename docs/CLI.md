@@ -137,7 +137,7 @@ At a terminal without `--json`, errors go to stderr as `error: <message>` and su
 
 Every run reports live progress **on stderr** (stdout stays reserved for data), in the mode-appropriate form:
 
-- **At a terminal**: an [indicatif](https://crates.io/crates/indicatif) progress bar with the current stage, work counts, and the estimated time remaining. It clears itself on completion, leaving only the one-line summary. Hidden automatically when stderr is redirected.
+- **At a terminal**: a progress bar redrawn in place with the current stage, work counts, and the estimated time remaining. It clears itself on completion, leaving only the one-line summary. Hidden automatically when stderr is redirected.
 - **In machine mode** (`--json` or piped stdout): one single-key `{ "Progress": { ... } }` JSON document per line — emitted immediately at every stage change and at least once per second in between — so a harness always knows the stage, the counts, and the ETA:
 
 ```json

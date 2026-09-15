@@ -26,6 +26,7 @@ Committing locally stays free and fast; the gate runs when code is about to leav
 ## Code conventions
 
 - Formatting is `rustfmt.toml` (2-space, 120 columns); `cargo fmt --all` before pushing — the gate enforces it.
-- All data shapes live in the `dto/` crate: strong typing, a doc comment on every field, single-key JSON unions (`{ "VariantName": { … } }`), `snake_case` fields / `CamelCase` variants, and `deny_unknown_fields` everywhere.
-- Runtime-fallible operations return `Result` (`thiserror` enums); `unwrap()`/`expect()` only for provable invariants, with a message saying why the invariant holds.
+- All data shapes live in the `dto/` crate: strong typing, a doc comment on every field, single-key JSON unions (`{ "VariantName": { … } }`), `snake_case` fields / `CamelCase` variants, and strict readers everywhere (`json::Fields` claims every field and rejects the rest).
+- Runtime-fallible operations return `Result` (error enums with a hand-written `Display`); `unwrap()`/`expect()` only for provable invariants, with a message saying why the invariant holds.
+- No third-party crates. The workspace depends on nothing outside itself — JSON goes through `packdiff_dto::json`, errors and the progress bar are in-house — and `cli/tests/dependencies.rs` fails on the first registry crate. A consumer's dependency tree and license audit gain only packdiff's own MIT crates.
 - If a piece of logic is not unit-tested, a comment at that spot must say how it IS tested.

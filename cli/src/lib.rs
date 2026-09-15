@@ -6,8 +6,8 @@
 //! its two halves, for callers that also want the typed document (what the
 //! CLI's `--dump-json` writes). Progress lands on a caller-supplied
 //! [`progress::ProgressObserver`]; `&()` reports nothing. Depend with
-//! `default-features = false` to drop the binary-only terminal machinery
-//! (`indicatif`).
+//! `default-features = false` to drop the binary-only terminal machinery.
+//! packdiff brings no third-party crates with it.
 //!
 //! Requirements: `git` on `PATH` at run time. The page's comment engine is
 //! inlined into this crate: the crates.io release ships it precompiled, and a

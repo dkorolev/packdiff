@@ -7,7 +7,7 @@ Both document families carry `schema_version` (currently `3`) and `tool: "packdi
 ## Encoding and compatibility rules
 
 - **Field names are `snake_case`; union variants are `CamelCase`** and encode as **single-key objects** — `{ "Add": { "new": 2, "text": "…" } }` — never a `"type"` discriminator alongside the payload. Payload-less enums (`FileStatus`, `Side`) serialize as the bare variant-name string.
-- **Unknown fields are strict-rejected** (`deny_unknown_fields`) on every struct: a typo or a drifted producer fails loudly at the boundary instead of silently becoming "field never set."
+- **Unknown fields are strict-rejected** on every struct (the codec's `Fields` reader claims every field by name and rejects whatever is left): a typo or a drifted producer fails loudly at the boundary instead of silently becoming "field never set."
 - Parsers **reject documents from a newer schema** than they understand (`unsupported schema_version N`) and accept older ones. `schema_version` is the one deliberate opt-in to long-term compatibility — review documents live in users' localStorage.
 - Determinism: identical inputs produce byte-identical outputs. Ordering is always explicit, and timestamps/ids are caller-supplied inputs, never generated inside the model.
 

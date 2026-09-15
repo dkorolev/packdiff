@@ -133,10 +133,10 @@ std::fs::write("review.html", &out.html)?;
 
 ```toml
 [dependencies]
-packdiff = { version = "0.9", default-features = false }
+packdiff = { version = "0.10", default-features = false }
 ```
 
-`default-features = false` drops the binary-only terminal machinery (`indicatif`). The build-time wasm prerequisite above still applies, and `git` must be on `PATH` at run time. The typed data model is re-exported as `packdiff::dto`; progress can be observed by implementing `packdiff::progress::ProgressObserver` (`&()` observes nothing). `cargo run --example pack -- main` runs the [worked example](cli/examples/pack.rs), and consumers that only read packdiff's artifacts — exported comments, `--dump-json` documents — need just the pure-logic [`packdiff-dto`](dto/) crate.
+`default-features = false` drops the binary and its terminal progress bar. packdiff brings no third-party crates with it — the JSON codec, the progress bar, and the error types are all in-house, and `cli/tests/dependencies.rs` keeps it that way — so a consumer's dependency tree gains exactly `packdiff` and `packdiff-dto`, both MIT. The crates.io release ships the comment engine precompiled, so no wasm target is needed either; `git` must be on `PATH` at run time. The typed data model is re-exported as `packdiff::dto`; progress can be observed by implementing `packdiff::progress::ProgressObserver` (`&()` observes nothing). `cargo run --example pack -- main` runs the [worked example](cli/examples/pack.rs), and consumers that only read packdiff's artifacts — exported comments, `--dump-json` documents — need just the pure-logic [`packdiff-dto`](dto/) crate.
 
 ## Documentation
 

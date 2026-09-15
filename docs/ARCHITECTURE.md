@@ -22,15 +22,16 @@ Ship the **same compiled data model to both sides of the tool**. The `packdiff-d
 
 | Crate | Dir | Kind | Deps | Role |
 | --- | --- | --- | --- | --- |
-| `packdiff-dto` | `dto/` | rlib | serde, serde_json | All data + semantics ([spec](DATA-MODEL.md)) |
-| `packdiff-wasm` | `wasm/` | cdylib | dto, serde, serde_json | Transport shim only ([ABI](WASM-ABI.md)) |
-| `packdiff` | `cli/` | bin `packdiff` | dto, serde_json | argv, git, HTML rendering ([CLI](CLI.md)) |
+| `packdiff-dto` | `dto/` | rlib | — | All data + semantics ([spec](DATA-MODEL.md)), and the JSON codec |
+| `packdiff-wasm` | `wasm/` | cdylib | dto | Transport shim only ([ABI](WASM-ABI.md)) |
+| `packdiff` | `cli/` | bin `packdiff` | dto | argv, git, HTML rendering ([CLI](CLI.md)) |
 
 Boundary rules that keep the focus honest:
 
 - `dto/` never does I/O; time and ids are function inputs.
 - `wasm/` contains no semantics — every function is parse-envelope → one dto call → serialize-envelope.
 - `cli/` contains no data semantics — `git.rs` shells out and returns raw text; `parse_unified_diff` (dto) interprets it; `render.rs` is presentation (escaping, tables, inlining).
+- Nothing third-party, anywhere: `dto/src/json.rs` is the one JSON codec (typed, strict, order-preserving), errors implement `Display` by hand, and the progress bar draws itself. `cli/tests/dependencies.rs` fails on the first crate from outside the workspace, so a consumer's dependency tree — and its license audit — gains only these three MIT crates.
 
 ## Build pipeline
 
@@ -81,7 +82,7 @@ CI runs two further jobs that need the network and so stay out of `test.sh`: **p
 
 git is the one external process. Every invocation is fallible and liveness-bounded (`cli/src/git.rs`): output is drained on reader threads, a watchdog kills the process after 5 minutes of total silence, and once a command exceeds 10 seconds a status line is emitted to stderr every ~10 s so callers can tell packdiff is alive. `--verbose` additionally echoes each git command line and its wall time.
 
-Above that, `cli/src/progress.rs` reports whole-run progress on stderr: an indicatif bar (stage, counts, ETA) at a terminal, and in machine mode one `{ "Progress": { ... } }` JSON document per line — on every stage change and at least once per second — ending with a `Done` report only on success (see [CLI.md](CLI.md#liveness-and-progress)).
+Above that, `cli/src/progress.rs` reports whole-run progress on stderr: a bar redrawn in place (stage, counts, ETA) at a terminal, and in machine mode one `{ "Progress": { ... } }` JSON document per line — on every stage change and at least once per second — ending with a `Done` report only on success (see [CLI.md](CLI.md#liveness-and-progress)).
 
 ## Publishing
 
