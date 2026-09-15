@@ -61,7 +61,7 @@ From crates.io — the release ships the page's comment engine precompiled, so t
 ```console
 $ cargo install packdiff
 $ packdiff --version
-packdiff 0.9.2
+packdiff 0.10.0
 ```
 
 Building from source compiles that engine for `wasm32-unknown-unknown`, so the `--git` and checkout installs below need the target once:
