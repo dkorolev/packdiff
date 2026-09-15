@@ -18,6 +18,8 @@
 
 use std::io::{IsTerminal, Write};
 
+use packdiff::dto::json::{Map, ToJson, Value};
+
 use packdiff::progress::{Progress, Stage};
 use packdiff::{pack, Error as CliError, PackOptions};
 
@@ -369,8 +371,7 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
   progress.step(&out_path);
 
   if let Some(dump) = &args.dump_json {
-    let mut json =
-      serde_json::to_string_pretty(&doc).expect("DiffDocument serializes: no non-string keys, no fallible types");
+    let mut json = doc.to_json().to_string_pretty();
     json.push('\n');
     std::fs::write(dump, json).map_err(|e| CliError::Io { message: format!("cannot write {dump}: {e}") })?;
   }
@@ -395,40 +396,33 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
 
   if machine {
     if out_path != "-" {
-      let document = serde_json::json!({
-        "Packed": {
-          "out": out_path,
-          "repo": doc.repo,
-          "base": doc.base,
-          "head": doc.head,
-          "merge_base": doc.merge_base,
-          "commits": doc.commits.len(),
-          "files": doc.files.len(),
-          "additions": doc.additions(),
-          "deletions": doc.deletions(),
-          "binary_files": doc.files.iter().filter(|f| f.binary).count(),
-          "description": doc.description.as_ref().map(|d| &d.path),
-          // Newest first; empty unless the history commits the description
-          // more than once, which the page also flags in a banner.
-          "superseded_descriptions": doc
-            .superseded_descriptions
-            .iter()
-            .filter_map(|d| d.revision.as_ref().map(|r| &r.short))
-            .collect::<Vec<_>>(),
-          "decisions": doc.decisions.iter().map(|d| &d.path).collect::<Vec<_>>(),
-          // Every lifted notes file records the same hidden commits, so any
-          // one of them answers "which commits were lifted off the page".
-          "notes_commits": doc
-            .description
-            .as_ref()
-            .or(doc.decisions.first())
-            .map(|d| d.commits.clone())
-            .unwrap_or_default(),
-          "warnings": warnings,
-        }
-      });
-      let pretty =
-        serde_json::to_string_pretty(&document).expect("machine document serializes: constructed from JSON values");
+      let mut packed = Map::new();
+      packed.insert("out", out_path.to_string());
+      packed.insert("repo", &doc.repo);
+      packed.insert("base", doc.base.to_json());
+      packed.insert("head", doc.head.to_json());
+      packed.insert("merge_base", &doc.merge_base);
+      packed.insert("commits", doc.commits.len());
+      packed.insert("files", doc.files.len());
+      packed.insert("additions", doc.additions());
+      packed.insert("deletions", doc.deletions());
+      packed.insert("binary_files", doc.files.iter().filter(|f| f.binary).count());
+      packed.insert("description", doc.description.as_ref().map(|d| &d.path));
+      // Newest first; empty unless the history commits the description
+      // more than once, which the page also flags in a banner.
+      packed.insert(
+        "superseded_descriptions",
+        doc.superseded_descriptions.iter().filter_map(|d| d.revision.as_ref().map(|r| &r.short)).collect::<Vec<_>>(),
+      );
+      packed.insert("decisions", doc.decisions.iter().map(|d| &d.path).collect::<Vec<_>>());
+      // Every lifted notes file records the same hidden commits, so any
+      // one of them answers "which commits were lifted off the page".
+      packed.insert(
+        "notes_commits",
+        doc.description.as_ref().or(doc.decisions.first()).map(|d| d.commits.clone()).unwrap_or_default(),
+      );
+      packed.insert("warnings", warnings.clone());
+      let pretty = Value::object([("Packed", Value::Object(packed))]).to_string_pretty();
       write_stdout(format!("{pretty}\n").as_bytes())?;
     }
   } else if out_path != "-" {
@@ -448,8 +442,7 @@ fn run(args: &Args, machine: bool) -> Result<(), CliError> {
 
 fn fail(e: &CliError, machine: bool, color: ColorMode) -> ! {
   if machine {
-    let pretty = serde_json::to_string_pretty(&e.to_machine_json())
-      .expect("error document serializes: constructed from JSON values");
+    let pretty = e.to_machine_json().to_string_pretty();
     // In machine mode the error document IS the data: stdout, then the code.
     let _ = std::io::stdout().write_all(format!("{pretty}\n").as_bytes());
   } else {

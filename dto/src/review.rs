@@ -66,13 +66,12 @@
 //! reconstructed from v2 data, and pretending otherwise would reintroduce
 //! the clock race permanently to smooth a one-time upgrade edge.
 
-use serde::{Deserialize, Serialize};
-
+use crate::json::{self, Fields, FromJson, Map, ToJson, Value};
 use crate::{ModelError, RefInfo, SCHEMA_VERSION, TOOL};
 
 /// Which side of the diff a comment anchors to. Serialized as the bare
 /// `CamelCase` variant name (`"Old"` / `"New"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Side {
   /// Pre-image (a deleted line): `line` is an old-file line number.
   Old,
@@ -84,16 +83,13 @@ pub enum Side {
 /// plus the writing actor as the deterministic tiebreaker. `{ seq: 0,
 /// actor: "" }` marks data upgraded from a pre-CRDT (v1/v2) document; every
 /// real write carries `seq >= 1`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version {
   /// Lamport sequence: `document clock + 1` at write time.
-  #[serde(default)]
   pub seq: u64,
   /// Caller-supplied opaque writer id (one per browser profile, generated
   /// like comment ids — the model stays entropy-free). Byte order breaks
   /// `seq` ties between actors.
-  #[serde(default)]
   pub actor: String,
 }
 
@@ -118,8 +114,7 @@ fn version_key<'a>(v: &'a Version, timestamp: &'a str) -> (u64, &'a str, &'a str
 /// single-key union — `{ "Approved": { "at": "…" } }` — with no
 /// discriminator field. The timestamp is what humans and exports read; the
 /// merge is decided by the document's `verdict_version` register.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
   /// The change is approved as it stands.
   Approved {
@@ -168,8 +163,7 @@ impl Verdict {
 /// (`text` and the anchor, under [`Comment::version`]) and **resolution**
 /// (`resolved_at`, under [`Comment::resolution_version`]) — see the module
 /// doc for why the split is exactly here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comment {
   /// Caller-supplied unique id — the comment's identity for upsert, delete,
   /// and import merging.
@@ -191,16 +185,13 @@ pub struct Comment {
   /// When the comment was resolved, RFC 3339 UTC, caller-supplied.
   /// Present = resolved; absent (and omitted from JSON) = open. Reopening
   /// removes it. Absent from v1 documents, which parse as all-open.
-  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub resolved_at: Option<String>,
   /// The content register's write version. On upsert the caller supplies
   /// only `actor`; the model stamps `seq`. Zero (and omitted) for upgraded
   /// v1/v2 data.
-  #[serde(default, skip_serializing_if = "Version::is_zero")]
   pub version: Version,
   /// The resolution register's write version, independent of `version` so
   /// a concurrent edit and resolve both survive a merge.
-  #[serde(default, skip_serializing_if = "Version::is_zero")]
   pub resolution_version: Version,
 }
 
@@ -274,8 +265,7 @@ fn content_order(c: &Comment) -> (&str, &str, u32, &str, &str) {
 /// living comments so exports and the page keep iterating `comments`
 /// untouched; carried by the canonical JSON (deletions must travel through
 /// export/import, or they would resurrect through the exchange path).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tombstone {
   /// The deleted comment's id.
   pub id: String,
@@ -289,13 +279,11 @@ pub struct Tombstone {
   /// while the tombstone dominates; a revived comment's tombstone drops its
   /// shadow, since a content register that once dominated the delete
   /// dominates it forever.
-  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub shadow: Option<Comment>,
 }
 
 /// The mutable review state for one `(repo, base_sha, head_sha)` diff.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewDocument {
   /// Schema generation this document was written with; readers reject
   /// documents newer than they understand ([`SCHEMA_VERSION`]). Every write
@@ -315,26 +303,193 @@ pub struct ReviewDocument {
   /// The reviewer's verdict on the whole change; `None` (and omitted from
   /// JSON) while the review is in progress — and in v1 documents, which
   /// parse as verdict-less.
-  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub verdict: Option<Verdict>,
   /// The verdict register's write version. Zero for upgraded v1/v2
   /// documents; stamped on every [`ReviewDocument::set_verdict`], including
   /// the clearing one — which is what makes clearing merge.
-  #[serde(default, skip_serializing_if = "Version::is_zero")]
   pub verdict_version: Version,
   /// The document's Lamport clock: the highest `seq` it has ever written or
   /// merged in. Zero (and omitted) only before the first post-upgrade write.
-  #[serde(default, skip_serializing_if = "u64_is_zero")]
   pub clock: u64,
   /// Deleted comment ids with their delete versions, ordered by id. Never
   /// garbage-collected — see the module doc for why that is a decision and
   /// not an oversight.
-  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub tombstones: Vec<Tombstone>,
 }
 
-fn u64_is_zero(n: &u64) -> bool {
-  *n == 0
+// ------------------------------------------------------------ JSON codec
+//
+// Every struct lists its fields once for writing and once for reading, in
+// the documented order; reading is strict (unknown fields rejected). The
+// fields documented as "omitted from JSON" when absent, zero, or empty are
+// skipped on write and defaulted on read — which is what lets a v1/v2
+// document parse into the upgraded-in-place form.
+
+impl ToJson for Side {
+  fn to_json(&self) -> Value {
+    Value::from(match self {
+      Side::Old => "Old",
+      Side::New => "New",
+    })
+  }
+}
+
+impl FromJson for Side {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    match json::variant_name(value, "Side")? {
+      "Old" => Ok(Side::Old),
+      "New" => Ok(Side::New),
+      other => Err(json::Error::unknown_variant(other, "Side")),
+    }
+  }
+}
+
+impl ToJson for Version {
+  fn to_json(&self) -> Value {
+    Value::object([("seq", Value::from(self.seq)), ("actor", Value::from(&self.actor))])
+  }
+}
+
+impl FromJson for Version {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "Version")?;
+    let version = Version { seq: f.or_default("seq")?, actor: f.or_default("actor")? };
+    f.finish()?;
+    Ok(version)
+  }
+}
+
+impl ToJson for Verdict {
+  fn to_json(&self) -> Value {
+    let (variant, at) = match self {
+      Verdict::Approved { at } => ("Approved", at),
+      Verdict::ChangesRequired { at } => ("ChangesRequired", at),
+    };
+    Value::object([(variant, Value::object([("at", at)]))])
+  }
+}
+
+impl FromJson for Verdict {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let (variant, payload) = json::union(value, "Verdict")?;
+    let mut f = Fields::of(payload, "Verdict")?;
+    let at: String = f.required("at")?;
+    f.finish()?;
+    match variant {
+      "Approved" => Ok(Verdict::Approved { at }),
+      "ChangesRequired" => Ok(Verdict::ChangesRequired { at }),
+      other => Err(json::Error::unknown_variant(other, "Verdict")),
+    }
+  }
+}
+
+impl ToJson for Comment {
+  fn to_json(&self) -> Value {
+    let mut o = Map::new();
+    o.insert("id", &self.id);
+    o.insert("file", &self.file);
+    o.insert("side", self.side.to_json());
+    o.insert("line", self.line);
+    o.insert("text", &self.text);
+    o.insert("created_at", &self.created_at);
+    o.insert("updated_at", &self.updated_at);
+    if let Some(at) = &self.resolved_at {
+      o.insert("resolved_at", at);
+    }
+    if !self.version.is_zero() {
+      o.insert("version", self.version.to_json());
+    }
+    if !self.resolution_version.is_zero() {
+      o.insert("resolution_version", self.resolution_version.to_json());
+    }
+    Value::Object(o)
+  }
+}
+
+impl FromJson for Comment {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "Comment")?;
+    let comment = Comment {
+      id: f.required("id")?,
+      file: f.required("file")?,
+      side: f.required("side")?,
+      line: f.required("line")?,
+      text: f.required("text")?,
+      created_at: f.required("created_at")?,
+      updated_at: f.required("updated_at")?,
+      resolved_at: f.optional("resolved_at")?,
+      version: f.or_default("version")?,
+      resolution_version: f.or_default("resolution_version")?,
+    };
+    f.finish()?;
+    Ok(comment)
+  }
+}
+
+impl ToJson for Tombstone {
+  fn to_json(&self) -> Value {
+    let mut o = Map::new();
+    o.insert("id", &self.id);
+    o.insert("deleted", self.deleted.to_json());
+    if let Some(shadow) = &self.shadow {
+      o.insert("shadow", shadow.to_json());
+    }
+    Value::Object(o)
+  }
+}
+
+impl FromJson for Tombstone {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "Tombstone")?;
+    let tombstone = Tombstone { id: f.required("id")?, deleted: f.required("deleted")?, shadow: f.optional("shadow")? };
+    f.finish()?;
+    Ok(tombstone)
+  }
+}
+
+impl ToJson for ReviewDocument {
+  fn to_json(&self) -> Value {
+    let mut o = Map::new();
+    o.insert("schema_version", self.schema_version);
+    o.insert("tool", &self.tool);
+    o.insert("repo", &self.repo);
+    o.insert("base", self.base.to_json());
+    o.insert("head", self.head.to_json());
+    o.insert("comments", self.comments.to_json());
+    if let Some(verdict) = &self.verdict {
+      o.insert("verdict", verdict.to_json());
+    }
+    if !self.verdict_version.is_zero() {
+      o.insert("verdict_version", self.verdict_version.to_json());
+    }
+    if self.clock != 0 {
+      o.insert("clock", self.clock);
+    }
+    if !self.tombstones.is_empty() {
+      o.insert("tombstones", self.tombstones.to_json());
+    }
+    Value::Object(o)
+  }
+}
+
+impl FromJson for ReviewDocument {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "ReviewDocument")?;
+    let doc = ReviewDocument {
+      schema_version: f.required("schema_version")?,
+      tool: f.required("tool")?,
+      repo: f.required("repo")?,
+      base: f.required("base")?,
+      head: f.required("head")?,
+      comments: f.required("comments")?,
+      verdict: f.optional("verdict")?,
+      verdict_version: f.or_default("verdict_version")?,
+      clock: f.or_default("clock")?,
+      tombstones: f.or_default("tombstones")?,
+    };
+    f.finish()?;
+    Ok(doc)
+  }
 }
 
 impl ReviewDocument {
@@ -360,7 +515,7 @@ impl ReviewDocument {
   /// with zero versions and a zero clock — the upgraded-in-place form the
   /// module doc describes.
   pub fn parse(json: &str) -> Result<Self, ModelError> {
-    let mut doc: ReviewDocument = serde_json::from_str(json).map_err(|e| ModelError::Json(e.to_string()))?;
+    let mut doc: ReviewDocument = crate::json::from_str(json).map_err(|e| ModelError::Json(e.to_string()))?;
     if doc.schema_version > SCHEMA_VERSION {
       return Err(ModelError::UnsupportedSchema { found: doc.schema_version, supported: SCHEMA_VERSION });
     }
@@ -395,7 +550,7 @@ impl ReviewDocument {
   /// Canonical serialized form (pretty, trailing newline) — what exports
   /// and the localStorage round-trip use.
   pub fn to_json_pretty(&self) -> String {
-    let mut s = serde_json::to_string_pretty(self).expect("document serializes: no non-string keys, no fallible types");
+    let mut s = self.to_json().to_string_pretty();
     s.push('\n');
     s
   }
@@ -536,7 +691,7 @@ impl ReviewDocument {
     let ts = |v: &Option<Verdict>| v.as_ref().map(|v| v.at().to_string()).unwrap_or_default();
     let (sts, its) = (ts(&self.verdict), ts(&incoming.verdict));
     let (a, b) = (version_key(&self.verdict_version, &sts), version_key(&incoming.verdict_version, &its));
-    let value = |v: &Option<Verdict>| serde_json::to_string(v).expect("verdict serializes");
+    let value = |v: &Option<Verdict>| v.to_json().to_string();
     if b > a || (b == a && value(&incoming.verdict) > value(&self.verdict)) {
       self.verdict = incoming.verdict.clone();
       self.verdict_version = incoming.verdict_version.clone();
@@ -656,15 +811,15 @@ mod tests {
 
   #[test]
   fn side_serializes_as_camelcase_variant_name() {
-    assert_eq!(serde_json::to_value(Side::Old).unwrap(), serde_json::json!("Old"));
-    assert_eq!(serde_json::to_value(Side::New).unwrap(), serde_json::json!("New"));
+    assert_eq!(Side::Old.to_json(), Value::from("Old"));
+    assert_eq!(Side::New.to_json(), Value::from("New"));
   }
 
   #[test]
   fn unknown_fields_are_rejected() {
-    let mut v = serde_json::to_value(comment("c1", "a.rs", 5, "t")).unwrap();
-    v.as_object_mut().unwrap().insert("sneaky".into(), serde_json::json!(true));
-    assert!(serde_json::from_value::<Comment>(v).is_err());
+    let mut v = comment("c1", "a.rs", 5, "t").to_json();
+    v.as_object_mut().unwrap().insert("sneaky", true);
+    assert!(Comment::from_json(&v).is_err());
   }
 
   #[test]
@@ -943,7 +1098,7 @@ mod tests {
   fn parse_rejects_newer_schema() {
     let mut d = doc();
     d.schema_version = SCHEMA_VERSION + 1;
-    let json = serde_json::to_string(&d).unwrap();
+    let json = d.to_json().to_string();
     assert_eq!(
       ReviewDocument::parse(&json),
       Err(ModelError::UnsupportedSchema { found: SCHEMA_VERSION + 1, supported: SCHEMA_VERSION })
@@ -966,7 +1121,7 @@ mod tests {
       version: Version::default(),
       resolution_version: Version::default(),
     });
-    let json = serde_json::to_string(&d).unwrap();
+    let json = d.to_json().to_string();
     assert!(matches!(ReviewDocument::parse(&json), Err(ModelError::InvalidComment(_))));
   }
 
@@ -976,7 +1131,7 @@ mod tests {
     d.comments.push(comment("b", "z.rs", 9, "2026-07-03T10:00:00Z"));
     d.comments.push(comment("a", "a.rs", 1, "2026-07-03T10:00:00Z"));
     d.comments[0].version = Version { seq: 41, actor: "x".into() };
-    let parsed = ReviewDocument::parse(&serde_json::to_string(&d).unwrap()).unwrap();
+    let parsed = ReviewDocument::parse(&d.to_json().to_string()).unwrap();
     assert_eq!(parsed.comments[0].id, "a");
     assert_eq!(parsed.clock, 41, "a hand-raised version cannot outrun the clock");
   }
@@ -984,12 +1139,12 @@ mod tests {
   #[test]
   fn verdict_serializes_as_single_key_union_with_timestamp() {
     assert_eq!(
-      serde_json::to_value(verdict_approved("2026-07-13T10:00:00Z")).unwrap(),
-      serde_json::json!({ "Approved": { "at": "2026-07-13T10:00:00Z" } })
+      verdict_approved("2026-07-13T10:00:00Z").to_json(),
+      json::parse(r#"{ "Approved": { "at": "2026-07-13T10:00:00Z" } }"#).unwrap()
     );
     assert_eq!(
-      serde_json::to_value(Verdict::ChangesRequired { at: "t".into() }).unwrap(),
-      serde_json::json!({ "ChangesRequired": { "at": "t" } })
+      Verdict::ChangesRequired { at: "t".into() }.to_json(),
+      json::parse(r#"{ "ChangesRequired": { "at": "t" } }"#).unwrap()
     );
   }
 
@@ -1062,7 +1217,7 @@ mod tests {
     assert!(matches!(d.upsert(blank), Err(ModelError::InvalidComment(_))));
     let open = comment("c3", "a.rs", 7, "t");
     d.upsert(open).unwrap();
-    assert!(!serde_json::to_string(&d.comments[1]).unwrap().contains("resolved_at"));
+    assert!(!d.comments[1].to_json().to_string().contains("resolved_at"));
   }
 
   #[test]

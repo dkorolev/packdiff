@@ -10,6 +10,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use packdiff::dto::json::{self, Value};
+
 /// A command with git's own environment scrubbed. Under a git hook (the pre-push gate runs
 /// this suite) git exports GIT_DIR and friends to point at the repository being pushed;
 /// a `git init` in a temp dir that inherited them would re-initialize THAT repository —
@@ -112,7 +114,7 @@ fn end_to_end() {
     .expect("binary runs");
   assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 
-  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("stdout is one JSON document");
+  let doc: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).expect("stdout is one JSON document");
   let packed = doc.get("Packed").expect("single-key `Packed` document");
   assert_eq!(packed["commits"], 2, "merge-base mode ignores mainline drift");
   assert_eq!(packed["files"], 5);
@@ -204,7 +206,7 @@ fn end_to_end() {
 
   // The dumped DiffDocument parses back through the dto schema, with
   // single-key line unions.
-  let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+  let doc: Value = json::parse(&std::fs::read_to_string(&dump).unwrap()).unwrap();
   assert_eq!(doc["schema_version"], 3);
   assert_eq!(doc["files"].as_array().unwrap().len(), 5);
   assert_eq!(doc["base"]["name"], "main");
@@ -262,7 +264,7 @@ fn error_documents_and_exit_codes() {
   // Unknown ref → exit 4 and a single-key `UnknownRef` document with stage.
   let output = command(bin()).args(["main", "no-such-branch", "-C", repo.to_str().unwrap()]).output().unwrap();
   assert_eq!(output.status.code(), Some(4));
-  let err: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let err: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
   assert_eq!(err["UnknownRef"]["stage"], "ref");
   assert_eq!(err["UnknownRef"]["exit_code"], 4);
   assert_eq!(err["UnknownRef"]["ref"], "no-such-branch");
@@ -272,13 +274,13 @@ fn error_documents_and_exit_codes() {
   std::fs::create_dir_all(&empty).unwrap();
   let output = command(bin()).args(["main", "feature", "-C", empty.to_str().unwrap()]).output().unwrap();
   assert_eq!(output.status.code(), Some(3));
-  let err: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let err: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
   assert_eq!(err["NotAGitRepository"]["stage"], "repo");
 
   // Usage errors → exit 2, `UsageError` documents.
   let output = command(bin()).args(["--bogus-flag"]).output().unwrap();
   assert_eq!(output.status.code(), Some(2));
-  let err: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let err: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
   assert_eq!(err["UsageError"]["stage"], "usage");
   let output = command(bin()).args(["a", "b", "c"]).output().unwrap();
   assert_eq!(output.status.code(), Some(2));
@@ -295,7 +297,7 @@ fn machine_mode_refuses_non_canonical_invocations() {
   // canonical form told back, as a single-key document, exit 2.
   let output = command(bin()).args(["main", "--no-color"]).output().unwrap();
   assert_eq!(output.status.code(), Some(2));
-  let err: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let err: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
   assert_eq!(err["NonCanonicalInvocation"]["given"], "--no-color");
   assert_eq!(err["NonCanonicalInvocation"]["canonical"], "--color=never");
   assert_eq!(err["NonCanonicalInvocation"]["stage"], "usage");
@@ -371,7 +373,7 @@ fn range_syntax_and_head_default() {
   let output =
     command(bin()).args(["main", "-C", repo.to_str().unwrap(), "-o", out_file.to_str().unwrap()]).output().unwrap();
   assert!(output.status.success());
-  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let doc: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
   assert_eq!(doc["Packed"]["head"]["name"], "HEAD");
   assert_eq!(doc["Packed"]["commits"], 2, "HEAD == feature here");
 
@@ -431,10 +433,10 @@ fn machine_mode_streams_progress_on_stderr() {
   // stderr: every non-empty line is one single-key `Progress` document.
   // (Stage changes report immediately, so even this sub-second run streams.)
   let stderr = String::from_utf8_lossy(&output.stderr);
-  let reports: Vec<serde_json::Value> = stderr
+  let reports: Vec<Value> = stderr
     .lines()
     .filter(|l| !l.trim().is_empty())
-    .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("non-JSON stderr line {l:?}: {e}")))
+    .map(|l| json::parse(l).unwrap_or_else(|e| panic!("non-JSON stderr line {l:?}: {e}")))
     .collect();
   assert!(!reports.is_empty(), "no progress lines at all");
   let mut prev_percent = 0;
@@ -461,7 +463,7 @@ fn machine_mode_streams_progress_on_stderr() {
   assert_eq!(last["percent"], 100, "Done reports full completion");
 
   // stdout stays exactly one `Packed` document — progress never leaks there.
-  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let doc: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
   assert!(doc.get("Packed").is_some());
 
   // A failing run must NOT report `Done`.
@@ -488,7 +490,7 @@ fn default_output_filename() {
   assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
   let expected = tmp.join("packdiff-main-feature.html");
   assert!(expected.is_file(), "default filename derives from the refs");
-  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let doc: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
   assert_eq!(doc["Packed"]["out"], "packdiff-main-feature.html");
   // Piped stdout carries no ANSI escapes, ever.
   assert!(!String::from_utf8_lossy(&output.stdout).contains('\u{1b}'));
@@ -547,20 +549,20 @@ fn notes_commits_lift_journaled_decisions_into_their_own_panels() {
     .output()
     .unwrap();
   assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-  let packed = &serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["Packed"];
+  let packed = &json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap()["Packed"];
   assert_eq!(packed["description"], "PR-DESCRIPTION.md");
   assert_eq!(
     packed["decisions"],
-    serde_json::json!(["PR-DECISION-retry-safety.md", "PR-DECISION-schema.md"]),
+    json::parse(r#"["PR-DECISION-retry-safety.md", "PR-DECISION-schema.md"]"#).unwrap(),
     "root decisions confined to their own commits lift, in path order"
   );
   assert_eq!(packed["notes_commits"].as_array().unwrap().len(), 2);
 
-  let typed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+  let typed: Value = json::parse(&std::fs::read_to_string(&dump).unwrap()).unwrap();
   let decisions = typed["decisions"].as_array().unwrap();
   assert_eq!(decisions.len(), 2);
   assert!(decisions[0]["text"].as_str().unwrap().starts_with("# Retry safety"));
-  assert!(!serde_json::to_string(&typed["snapshots"]).unwrap().contains("PR-DECISION-retry-safety"));
+  assert!(!typed["snapshots"].to_string().contains("PR-DECISION-retry-safety"));
 
   let html = std::fs::read_to_string(&out).unwrap();
   assert!(html.contains(r##"href="#decisions">Decisions</a>"##), "the nav offers the section");
@@ -615,7 +617,7 @@ fn several_description_commits_are_flagged_and_all_versions_stay_commentable() {
     .output()
     .unwrap();
   assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-  let packed = &serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["Packed"];
+  let packed = &json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap()["Packed"];
   assert_eq!(packed["commits"], 2, "all three description commits are hidden");
   assert_eq!(packed["files"], 5, "PR-DESCRIPTION.md never enters the diff");
   assert_eq!(packed["description"], "PR-DESCRIPTION.md");
@@ -626,7 +628,7 @@ fn several_description_commits_are_flagged_and_all_versions_stay_commentable() {
   assert!(warnings[0].as_str().unwrap().contains("3 separate commits write PR-DESCRIPTION.md"));
   assert!(String::from_utf8_lossy(&output.stderr).contains("warning: malformed commit history"));
 
-  let typed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+  let typed: Value = json::parse(&std::fs::read_to_string(&dump).unwrap()).unwrap();
   assert!(typed["description"]["text"].as_str().unwrap().starts_with("# Final"), "newest first");
   let older = typed["superseded_descriptions"].as_array().unwrap();
   assert!(older[0]["text"].as_str().unwrap().starts_with("# Draft two"));
@@ -705,7 +707,7 @@ fn notes_commits_lift_into_the_description_panel() {
     .output()
     .unwrap();
   assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let doc: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
   let packed = &doc["Packed"];
   assert_eq!(packed["commits"], 3, "only the notes commit is hidden — the bot's CODE commit counts");
   assert_eq!(packed["files"], 6, "PR-DESCRIPTION.md is lifted out of the diff");
@@ -738,11 +740,11 @@ fn notes_commits_lift_into_the_description_panel() {
   );
   assert!(!html.contains("notes author"), "the page never names the convention");
 
-  let typed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&dump).unwrap()).unwrap();
+  let typed: Value = json::parse(&std::fs::read_to_string(&dump).unwrap()).unwrap();
   assert!(typed["description"]["text"].as_str().unwrap().starts_with("# Add evil"));
   let boundaries = typed["snapshots"]["boundaries"].as_array().unwrap();
   assert_eq!(boundaries.len(), 4, "merge-base plus the three CODE commits only");
-  assert!(!serde_json::to_string(&typed["snapshots"]).unwrap().contains("PR-DESCRIPTION"));
+  assert!(!typed["snapshots"].to_string().contains("PR-DESCRIPTION"));
 
   // Authorship is NOT part of the test. With no configured notes email at
   // all — the built-in default, which this repo's bot does not match — the
@@ -755,7 +757,7 @@ fn notes_commits_lift_into_the_description_panel() {
     .output()
     .unwrap();
   assert!(output.status.success());
-  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let doc: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
   assert_eq!(doc["Packed"]["commits"], 3, "the notes commit lifts on its paths alone");
   assert_eq!(doc["Packed"]["files"], 6);
   assert_eq!(doc["Packed"]["description"], "PR-DESCRIPTION.md");
@@ -772,7 +774,7 @@ fn notes_commits_lift_into_the_description_panel() {
     .output()
     .unwrap();
   assert!(output.status.success());
-  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let doc: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
   assert_eq!(doc["Packed"]["commits"], 4);
   assert_eq!(doc["Packed"]["files"], 7);
   assert!(doc["Packed"]["description"].is_null());
@@ -806,7 +808,7 @@ fn notes_commits_lift_around_a_merge_commit_in_two_dot_mode() {
   let output =
     command(bin()).args(["main..feature", "-C", repo.to_str().unwrap(), "-o", out.to_str().unwrap()]).output().unwrap();
   assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-  let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+  let doc: Value = json::parse(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
   let packed = &doc["Packed"];
   assert_eq!(packed["description"], "PR-DESCRIPTION.md", "the notes commit lifts with a merge in the range");
   assert_eq!(packed["notes_commits"].as_array().unwrap().len(), 1);

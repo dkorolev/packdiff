@@ -42,6 +42,11 @@ impl Error {
   fn new(message: impl Into<String>) -> Self {
     Self { message: message.into() }
   }
+
+  /// A union or enum name that `what` does not define.
+  pub fn unknown_variant(variant: &str, what: &str) -> Self {
+    Self::new(format!("unknown variant `{variant}` for {what}"))
+  }
 }
 
 impl fmt::Display for Error {
@@ -98,6 +103,10 @@ impl Map {
 
   pub fn keys(&self) -> impl Iterator<Item = &str> {
     self.entries.iter().map(|(k, _)| k.as_str())
+  }
+
+  pub fn values(&self) -> impl Iterator<Item = &Value> {
+    self.entries.iter().map(|(_, v)| v)
   }
 
   pub fn iter(&self) -> impl Iterator<Item = (&str, &Value)> {
@@ -1079,39 +1088,5 @@ mod tests {
     assert!(union(&parse(r#"{"Add": {}, "Del": {}}"#).unwrap(), "Line").is_err());
     assert_eq!(variant_name(&Value::from("Old"), "Side").unwrap(), "Old");
     assert!(variant_name(&Value::from(1u8), "Side").is_err());
-  }
-}
-
-// Byte-for-byte parity with serde_json, checked while serde_json is still a
-// dependency of this crate; the block goes with that dependency.
-#[cfg(test)]
-mod serde_parity {
-  use super::*;
-
-  fn samples() -> Vec<String> {
-    vec![
-      concat!(
-        r#"{"schema_version":3,"tool":"packdiff","repo":"r","base":{"name":"main","sha":"aaaa"},"#,
-        r#""files":[{"old_path":null,"new_path":"a/b.rs","status":"Added","binary":false,"hunks":[{"header":"@@ -0,0 +1,2 @@","#,
-        r#""lines":[{"Add":{"new":1,"text":"fn x() { \"q\" <b> \\ \t é 😀 \u0001 \u007f }"}},{"Meta":{"text":"\\ No newline"}}]}],"#,
-        r#""additions":2,"deletions":0,"notes":[]}],"empty":{},"n":[1,-2,18446744073709551615,-9223372036854775808],"f":[1.5,1e2,2.5e-7,1e21]}"#
-      )
-      .to_string(),
-      "[]".to_string(),
-      "{}".to_string(),
-      "\"s\"".to_string(),
-      "0".to_string(),
-      "null".to_string(),
-    ]
-  }
-
-  #[test]
-  fn compact_pretty_and_sorted_output_match_serde_json() {
-    for text in samples() {
-      let ours = parse(&text).unwrap();
-      let theirs: serde_json::Value = serde_json::from_str(&text).unwrap();
-      assert_eq!(ours.sorted().to_string(), serde_json::to_string(&theirs).unwrap(), "compact (sorted) for {text}");
-      assert_eq!(ours.sorted().to_string_pretty(), serde_json::to_string_pretty(&theirs).unwrap(), "pretty for {text}");
-    }
   }
 }

@@ -16,8 +16,6 @@ keywords = ["git", "diff", "code-review", "html", "wasm"]
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 thiserror = "2.0"
 # The internal library, pinned once here so its version lives in a single
 # place. `path` is used inside the workspace; `version` is what a published

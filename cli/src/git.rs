@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use packdiff_dto::json::{Map, Value};
+
 use packdiff_dto::diff::Commit;
 
 /// Kill a git process after this much *silence* (no output at all).
@@ -102,36 +104,42 @@ impl CliError {
 
   /// The machine-mode document: a single-key union, request-specific variant
   /// names, `stage` inside the payload.
-  pub fn to_machine_json(&self) -> serde_json::Value {
-    let stage = self.stage();
-    let (variant, mut payload) = match self {
-      CliError::Usage { message } => ("UsageError", serde_json::json!({ "message": message })),
-      CliError::NonCanonical { given, canonical } => (
-        "NonCanonicalInvocation",
-        serde_json::json!({
-          "given": given,
-          "canonical": canonical,
-          "message": self.to_string(),
-        }),
-      ),
+  pub fn to_machine_json(&self) -> Value {
+    let mut payload = Map::new();
+    let variant = match self {
+      CliError::Usage { message } => {
+        payload.insert("message", message);
+        "UsageError"
+      }
+      CliError::NonCanonical { given, canonical } => {
+        payload.insert("given", given);
+        payload.insert("canonical", canonical);
+        payload.insert("message", self.to_string());
+        "NonCanonicalInvocation"
+      }
       CliError::NotAGitRepository { repo } => {
-        ("NotAGitRepository", serde_json::json!({ "repo": repo, "message": self.to_string() }))
+        payload.insert("repo", repo);
+        payload.insert("message", self.to_string());
+        "NotAGitRepository"
       }
       CliError::UnknownRef { repo, name } => {
-        ("UnknownRef", serde_json::json!({ "repo": repo, "ref": name, "message": self.to_string() }))
+        payload.insert("repo", repo);
+        payload.insert("ref", name);
+        payload.insert("message", self.to_string());
+        "UnknownRef"
       }
-      CliError::Git { message } => ("GitError", serde_json::json!({ "message": message })),
-      CliError::Io { message } => ("IoError", serde_json::json!({ "message": message })),
+      CliError::Git { message } => {
+        payload.insert("message", message);
+        "GitError"
+      }
+      CliError::Io { message } => {
+        payload.insert("message", message);
+        "IoError"
+      }
     };
-    payload
-      .as_object_mut()
-      .expect("payload is always a JSON object by construction")
-      .insert("stage".to_string(), serde_json::json!(stage));
-    payload
-      .as_object_mut()
-      .expect("payload is always a JSON object by construction")
-      .insert("exit_code".to_string(), serde_json::json!(self.code()));
-    serde_json::json!({ variant: payload })
+    payload.insert("stage", self.stage());
+    payload.insert("exit_code", self.code());
+    Value::object([(variant, Value::Object(payload))])
   }
 }
 

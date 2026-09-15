@@ -11,6 +11,7 @@
 //! presentation and browser state only) — see docs/ARCHITECTURE.md.
 
 use packdiff_dto::diff::{DiffDocument, FileDiff, FileStatus, Line};
+use packdiff_dto::json::{Map, ToJson, Value};
 use packdiff_dto::{highlight, markdown};
 
 const CSS: &str = include_str!("../assets/page.css");
@@ -27,32 +28,12 @@ fn content_fingerprint(bytes: &[u8]) -> String {
   format!("{hash:016x}")
 }
 
-/// Serialize straight into a `<script>`-safe JSON string: every `<` byte is
-/// emitted as the `\u003c` escape during serialization (identical after
-/// `JSON.parse`), so the data can never form `</script>` or any tag in the
-/// page. Single pass, one allocation — the multi-MB snapshots payload is
-/// never copied through an intermediate unescaped string. Escaping bytewise
-/// is sound: `<` is ASCII and UTF-8 continuation bytes never collide with it.
-fn script_safe_json<T: serde::Serialize>(value: &T) -> String {
-  struct ScriptSafe(Vec<u8>);
-  impl std::io::Write for ScriptSafe {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-      for &b in buf {
-        if b == b'<' {
-          self.0.extend_from_slice(b"\\u003c");
-        } else {
-          self.0.push(b);
-        }
-      }
-      Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-      Ok(())
-    }
-  }
-  let mut out = ScriptSafe(Vec::new());
-  serde_json::to_writer(&mut out, value).expect("embedded page JSON serializes: string keys only, no fallible types");
-  String::from_utf8(out.0).expect("serde_json emits UTF-8 and the escape is ASCII")
+/// Compact JSON for a `<script type="application/json">` body: `<` becomes
+/// `\u003c` so no embedded text can close the tag or open another. `<`
+/// only ever occurs inside JSON strings, where the escape means the same
+/// character, so the parsed value is unchanged.
+fn script_safe_json(value: &Value) -> String {
+  value.to_string().replace('<', "\\u003c")
 }
 
 pub fn esc(s: &str) -> String {
@@ -485,23 +466,21 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
   // refs, description, commit metadata, filename, or timestamp. Editing the
   // description or rebasing to an identical diff keeps the same review_id, so
   // saved local state survives; a different diff starts clean.
-  let identity = serde_json::json!({
-      "repo": doc.repo,
-      "files": doc.files,
-  });
-  let review_id = content_fingerprint(
-    serde_json::to_string(&identity).expect("review identity contains only serializable DTO fields").as_bytes(),
-  );
-  let config = serde_json::json!({
-      "tool": doc.tool,
-      "schema_version": doc.schema_version,
-      "repo": doc.repo,
-      "base": doc.base,
-      "head": doc.head,
-      "merge_base": doc.merge_base,
-      "generated_at": doc.generated_at,
-      "review_id": review_id,
-  });
+  // The keys are sorted: this fingerprint predates the in-house codec and was
+  // hashed over key-sorted bytes, and every saved review is filed under it —
+  // a different byte layout would orphan them all.
+  let identity = Value::object([("repo", Value::from(&doc.repo)), ("files", doc.files.to_json())]).sorted();
+  let review_id = content_fingerprint(identity.to_string().as_bytes());
+  let mut config = Map::new();
+  config.insert("tool", &doc.tool);
+  config.insert("schema_version", doc.schema_version);
+  config.insert("repo", &doc.repo);
+  config.insert("base", doc.base.to_json());
+  config.insert("head", doc.head.to_json());
+  config.insert("merge_base", &doc.merge_base);
+  config.insert("generated_at", &doc.generated_at);
+  config.insert("review_id", &review_id);
+  let config = Value::Object(config);
   let config_json = script_safe_json(&config);
   // Endpoint line counts for the expand-context control: the file's length
   // at the diff's start and end snapshots. `None` when snapshots are absent
@@ -535,7 +514,7 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
 
   // Escaped snapshots JSON is built up front so the page allocation below can
   // account for it — on multi-MB reviews it dwarfs the fixed chrome.
-  let snap_json = doc.snapshots.as_ref().map(script_safe_json);
+  let snap_json = doc.snapshots.as_ref().map(|snapshots| script_safe_json(&snapshots.to_json()));
 
   // Size the page buffer from its real components (diff HTML, file list,
   // embedded JSON, assets, base64 wasm) plus fixed chrome, so multi-MB pages

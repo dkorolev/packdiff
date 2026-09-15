@@ -5,13 +5,11 @@
 //! feeds it `git diff --no-color --no-ext-diff --find-renames` output. Nothing
 //! here shells out.
 
-use serde::{Deserialize, Serialize};
-
+use crate::json::{self, Fields, FromJson, Map, ToJson, Value};
 use crate::{RefInfo, SCHEMA_VERSION, TOOL};
 
 /// The immutable build artifact: one rendered diff between two pinned refs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct DiffDocument {
   /// Schema generation this document was written with; readers reject
   /// documents newer than they understand ([`SCHEMA_VERSION`]).
@@ -41,7 +39,6 @@ pub struct DiffDocument {
   /// in-page expansion of hunk context (any non-empty range). `None` (and
   /// omitted from JSON) when not collected — on older builds, or empty
   /// ranges, where there is no content to snapshot.
-  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub snapshots: Option<crate::snapshot::RangeSnapshots>,
   /// The PR description lifted out of the diff (the notes-commit
   /// convention: a commit whose changes are confined to notes files such as
@@ -51,7 +48,6 @@ pub struct DiffDocument {
   /// no notes commits. When several notes commits each rewrote the
   /// description, this is the NEWEST version and the older ones land in
   /// [`Self::superseded_descriptions`].
-  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub description: Option<NotesFile>,
   /// Earlier versions of [`Self::description`], newest first — non-empty
   /// only when the range commits `PR-DESCRIPTION.md` more than once, which
@@ -60,7 +56,6 @@ pub struct DiffDocument {
   /// rendered as its own commentable panel) rather than silently dropped,
   /// so a reviewer can comment on whichever one they meant. Empty (and
   /// omitted from JSON) in the well-formed case.
-  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub superseded_descriptions: Vec<NotesFile>,
   /// Decisions journaled while the change was made, lifted out of the diff
   /// by the same notes-commit convention as [`Self::description`]: notes
@@ -69,13 +64,11 @@ pub struct DiffDocument {
   /// panel, ordered by path; their commits and files are excluded from
   /// `commits` / `files`. Empty (and omitted from JSON) when the range
   /// journals no decisions.
-  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub decisions: Vec<NotesFile>,
 }
 
 /// A notes file lifted out of the diff and presented as a page panel.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct NotesFile {
   /// The path the file was committed under (e.g. `PR-DESCRIPTION.md`);
   /// comments on the rendered panel anchor to this path, `New` side,
@@ -91,14 +84,12 @@ pub struct NotesFile {
   /// The single notes commit this version came from, set only when the
   /// document carries several versions of one path and the panels must name
   /// which is which. `None` (and omitted from JSON) in the unambiguous case.
-  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub revision: Option<NotesRevision>,
 }
 
 /// The notes commit one version of a [`NotesFile`] came from: enough to
 /// label its panel and to point the reviewer at the commit to squash away.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct NotesRevision {
   /// Abbreviated commit SHA, as git rendered it.
   pub short: String,
@@ -142,8 +133,7 @@ impl DiffDocument {
 }
 
 /// One commit in the diffed range.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct Commit {
   /// Full 40-hex commit id — the stable identity of the commit.
   pub sha: String,
@@ -162,7 +152,7 @@ pub struct Commit {
 
 /// How a file changed. Serialized as the bare `CamelCase` variant name
 /// (`"Added"` / `"Deleted"` / `"Modified"` / `"Renamed"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileStatus {
   /// The file exists only in the post-image.
   Added,
@@ -176,8 +166,7 @@ pub enum FileStatus {
 
 /// One file's change. `old_path`/`new_path` are `None` where the file does not
 /// exist on that side (added / deleted).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct FileDiff {
   /// Pre-image path; `None` for added files.
   pub old_path: Option<String>,
@@ -215,8 +204,7 @@ impl FileDiff {
 }
 
 /// One contiguous run of diff lines.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct Hunk {
   /// The raw `@@ -a,b +c,d @@ context` header line, kept verbatim for display.
   pub header: String,
@@ -229,8 +217,7 @@ pub struct Hunk {
 /// Line numbers are 1-based and refer to the side named by the field
 /// (`old` = pre-image, `new` = post-image) — the same coordinates comments
 /// anchor to.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Line {
   /// A line present only in the post-image (`+` in unified diff).
   Add {
@@ -261,6 +248,254 @@ pub enum Line {
     /// The annotation verbatim, including its leading backslash.
     text: String,
   },
+}
+
+// ------------------------------------------------------------ JSON codec
+//
+// Every struct lists its fields once for writing and once for reading, in
+// the documented order; reading is strict (unknown fields rejected). Fields
+// documented as "omitted from JSON" when absent or empty are skipped on
+// write and defaulted on read.
+
+impl ToJson for DiffDocument {
+  fn to_json(&self) -> Value {
+    let mut o = Map::new();
+    o.insert("schema_version", self.schema_version);
+    o.insert("tool", &self.tool);
+    o.insert("repo", &self.repo);
+    o.insert("base", self.base.to_json());
+    o.insert("head", self.head.to_json());
+    o.insert("merge_base", &self.merge_base);
+    o.insert("generated_at", &self.generated_at);
+    o.insert("commits", self.commits.to_json());
+    o.insert("files", self.files.to_json());
+    if let Some(snapshots) = &self.snapshots {
+      o.insert("snapshots", snapshots.to_json());
+    }
+    if let Some(description) = &self.description {
+      o.insert("description", description.to_json());
+    }
+    if !self.superseded_descriptions.is_empty() {
+      o.insert("superseded_descriptions", self.superseded_descriptions.to_json());
+    }
+    if !self.decisions.is_empty() {
+      o.insert("decisions", self.decisions.to_json());
+    }
+    Value::Object(o)
+  }
+}
+
+impl FromJson for DiffDocument {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "DiffDocument")?;
+    let doc = DiffDocument {
+      schema_version: f.required("schema_version")?,
+      tool: f.required("tool")?,
+      repo: f.required("repo")?,
+      base: f.required("base")?,
+      head: f.required("head")?,
+      merge_base: f.required("merge_base")?,
+      generated_at: f.required("generated_at")?,
+      commits: f.required("commits")?,
+      files: f.required("files")?,
+      snapshots: f.optional("snapshots")?,
+      description: f.optional("description")?,
+      superseded_descriptions: f.or_default("superseded_descriptions")?,
+      decisions: f.or_default("decisions")?,
+    };
+    f.finish()?;
+    Ok(doc)
+  }
+}
+
+impl ToJson for NotesFile {
+  fn to_json(&self) -> Value {
+    let mut o = Map::new();
+    o.insert("path", &self.path);
+    o.insert("text", &self.text);
+    o.insert("commits", self.commits.to_json());
+    if let Some(revision) = &self.revision {
+      o.insert("revision", revision.to_json());
+    }
+    Value::Object(o)
+  }
+}
+
+impl FromJson for NotesFile {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "NotesFile")?;
+    let notes = NotesFile {
+      path: f.required("path")?,
+      text: f.required("text")?,
+      commits: f.required("commits")?,
+      revision: f.optional("revision")?,
+    };
+    f.finish()?;
+    Ok(notes)
+  }
+}
+
+impl ToJson for NotesRevision {
+  fn to_json(&self) -> Value {
+    Value::object([("short", &self.short), ("subject", &self.subject)])
+  }
+}
+
+impl FromJson for NotesRevision {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "NotesRevision")?;
+    let revision = NotesRevision { short: f.required("short")?, subject: f.required("subject")? };
+    f.finish()?;
+    Ok(revision)
+  }
+}
+
+impl ToJson for Commit {
+  fn to_json(&self) -> Value {
+    Value::object([
+      ("sha", &self.sha),
+      ("short", &self.short),
+      ("author", &self.author),
+      ("email", &self.email),
+      ("date", &self.date),
+      ("subject", &self.subject),
+    ])
+  }
+}
+
+impl FromJson for Commit {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "Commit")?;
+    let commit = Commit {
+      sha: f.required("sha")?,
+      short: f.required("short")?,
+      author: f.required("author")?,
+      email: f.required("email")?,
+      date: f.required("date")?,
+      subject: f.required("subject")?,
+    };
+    f.finish()?;
+    Ok(commit)
+  }
+}
+
+impl ToJson for FileStatus {
+  fn to_json(&self) -> Value {
+    Value::from(match self {
+      FileStatus::Added => "Added",
+      FileStatus::Deleted => "Deleted",
+      FileStatus::Modified => "Modified",
+      FileStatus::Renamed => "Renamed",
+    })
+  }
+}
+
+impl FromJson for FileStatus {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    match json::variant_name(value, "FileStatus")? {
+      "Added" => Ok(FileStatus::Added),
+      "Deleted" => Ok(FileStatus::Deleted),
+      "Modified" => Ok(FileStatus::Modified),
+      "Renamed" => Ok(FileStatus::Renamed),
+      other => Err(json::Error::unknown_variant(other, "FileStatus")),
+    }
+  }
+}
+
+impl ToJson for FileDiff {
+  fn to_json(&self) -> Value {
+    Value::object([
+      ("old_path", self.old_path.to_json()),
+      ("new_path", self.new_path.to_json()),
+      ("status", self.status.to_json()),
+      ("binary", self.binary.to_json()),
+      ("hunks", self.hunks.to_json()),
+      ("additions", self.additions.to_json()),
+      ("deletions", self.deletions.to_json()),
+      ("notes", self.notes.to_json()),
+    ])
+  }
+}
+
+impl FromJson for FileDiff {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "FileDiff")?;
+    let file = FileDiff {
+      old_path: f.optional("old_path")?,
+      new_path: f.optional("new_path")?,
+      status: f.required("status")?,
+      binary: f.required("binary")?,
+      hunks: f.required("hunks")?,
+      additions: f.required("additions")?,
+      deletions: f.required("deletions")?,
+      notes: f.required("notes")?,
+    };
+    f.finish()?;
+    Ok(file)
+  }
+}
+
+impl ToJson for Hunk {
+  fn to_json(&self) -> Value {
+    Value::object([("header", Value::from(&self.header)), ("lines", self.lines.to_json())])
+  }
+}
+
+impl FromJson for Hunk {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "Hunk")?;
+    let hunk = Hunk { header: f.required("header")?, lines: f.required("lines")? };
+    f.finish()?;
+    Ok(hunk)
+  }
+}
+
+impl ToJson for Line {
+  fn to_json(&self) -> Value {
+    let (variant, payload) = match self {
+      Line::Add { new, text } => ("Add", Value::object([("new", Value::from(*new)), ("text", Value::from(text))])),
+      Line::Del { old, text } => ("Del", Value::object([("old", Value::from(*old)), ("text", Value::from(text))])),
+      Line::Ctx { old, new, text } => {
+        ("Ctx", Value::object([("old", Value::from(*old)), ("new", Value::from(*new)), ("text", Value::from(text))]))
+      }
+      Line::Meta { text } => ("Meta", Value::object([("text", Value::from(text))])),
+    };
+    Value::object([(variant, payload)])
+  }
+}
+
+impl FromJson for Line {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let (variant, payload) = json::union(value, "Line")?;
+    let line = match variant {
+      "Add" => {
+        let mut f = Fields::of(payload, "Line::Add")?;
+        let line = Line::Add { new: f.required("new")?, text: f.required("text")? };
+        f.finish()?;
+        line
+      }
+      "Del" => {
+        let mut f = Fields::of(payload, "Line::Del")?;
+        let line = Line::Del { old: f.required("old")?, text: f.required("text")? };
+        f.finish()?;
+        line
+      }
+      "Ctx" => {
+        let mut f = Fields::of(payload, "Line::Ctx")?;
+        let line = Line::Ctx { old: f.required("old")?, new: f.required("new")?, text: f.required("text")? };
+        f.finish()?;
+        line
+      }
+      "Meta" => {
+        let mut f = Fields::of(payload, "Line::Meta")?;
+        let line = Line::Meta { text: f.required("text")? };
+        f.finish()?;
+        line
+      }
+      other => return Err(json::Error::unknown_variant(other, "Line")),
+    };
+    Ok(line)
+  }
 }
 
 /// Parse `git diff` unified output (with `--find-renames`) into typed files.
@@ -526,14 +761,14 @@ Binary files a/blob.bin and b/blob.bin differ
   #[test]
   fn lines_encode_as_single_key_unions() {
     let add = Line::Add { new: 2, text: "x".into() };
-    assert_eq!(serde_json::to_value(&add).unwrap(), serde_json::json!({ "Add": { "new": 2, "text": "x" } }));
-    assert_eq!(serde_json::to_value(FileStatus::Renamed).unwrap(), serde_json::json!("Renamed"));
+    assert_eq!(add.to_json(), json::parse(r#"{ "Add": { "new": 2, "text": "x" } }"#).unwrap());
+    assert_eq!(FileStatus::Renamed.to_json(), Value::from("Renamed"));
   }
 
   #[test]
   fn unknown_fields_are_rejected() {
     let bad = r#"{ "Add": { "new": 2, "text": "x", "sneaky": true } }"#;
-    assert!(serde_json::from_str::<Line>(bad).is_err());
+    assert!(json::from_str::<Line>(bad).is_err());
   }
 
   #[test]
@@ -560,8 +795,8 @@ Binary files a/blob.bin and b/blob.bin differ
         revision: None,
       }],
     );
-    let json = serde_json::to_string(&doc).unwrap();
-    let back: DiffDocument = serde_json::from_str(&json).unwrap();
+    let json = doc.to_json().to_string();
+    let back: DiffDocument = json::from_str(&json).unwrap();
     assert_eq!(back.schema_version, SCHEMA_VERSION);
     assert_eq!(back.files.len(), 5);
     assert_eq!(back.additions(), doc.additions());
@@ -583,12 +818,12 @@ Binary files a/blob.bin and b/blob.bin differ
       None,
       Vec::new(),
     );
-    let json = serde_json::to_string(&none).unwrap();
+    let json = none.to_json().to_string();
     assert!(!json.contains("description"));
     assert!(!json.contains("decisions"));
     assert!(!json.contains("revision"));
     // A document written before decisions existed still reads.
-    let back: DiffDocument = serde_json::from_str(&json).unwrap();
+    let back: DiffDocument = json::from_str(&json).unwrap();
     assert!(back.decisions.is_empty());
     assert!(back.superseded_descriptions.is_empty());
   }

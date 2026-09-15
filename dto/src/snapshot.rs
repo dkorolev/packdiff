@@ -8,16 +8,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
-
 use crate::diff::{FileDiff, FileStatus, Hunk, Line};
+use crate::json::{self, Fields, FromJson, ToJson, Value};
 use crate::ModelError;
 
 /// File contents pinned at every commit boundary of the diffed range,
 /// deduplicated by git blob id. Only paths touched by some commit in the
 /// range are tracked.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct RangeSnapshots {
   /// Blob id → content. `None` marks content that was not snapshotted
   /// (binary, not UTF-8, or oversized); sub-range diffs render such files as
@@ -29,14 +27,45 @@ pub struct RangeSnapshots {
 }
 
 /// The tracked files' state at one commit boundary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct Boundary {
   /// The commit this boundary is the state at (full SHA).
   pub sha: String,
   /// Path → blob id for every tracked path that exists at this boundary; a
   /// missing path does not exist here.
   pub files: BTreeMap<String, String>,
+}
+
+// ------------------------------------------------------------ JSON codec
+
+impl ToJson for RangeSnapshots {
+  fn to_json(&self) -> Value {
+    Value::object([("blobs", self.blobs.to_json()), ("boundaries", self.boundaries.to_json())])
+  }
+}
+
+impl FromJson for RangeSnapshots {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "RangeSnapshots")?;
+    let snapshots = RangeSnapshots { blobs: f.required("blobs")?, boundaries: f.required("boundaries")? };
+    f.finish()?;
+    Ok(snapshots)
+  }
+}
+
+impl ToJson for Boundary {
+  fn to_json(&self) -> Value {
+    Value::object([("sha", Value::from(&self.sha)), ("files", self.files.to_json())])
+  }
+}
+
+impl FromJson for Boundary {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "Boundary")?;
+    let boundary = Boundary { sha: f.required("sha")?, files: f.required("files")? };
+    f.finish()?;
+    Ok(boundary)
+  }
 }
 
 /// The diff between boundaries `from` and `to` (`from < to`, indices into
@@ -512,10 +541,10 @@ mod tests {
   #[test]
   fn snapshots_roundtrip_and_reject_unknown_fields() {
     let s = snap();
-    let json = serde_json::to_string(&s).unwrap();
-    let back: RangeSnapshots = serde_json::from_str(&json).unwrap();
+    let json = s.to_json().to_string();
+    let back: RangeSnapshots = json::from_str(&json).unwrap();
     assert_eq!(back.boundaries.len(), 3);
     let sneaky = json.replacen("{\"blobs\"", "{\"sneaky\":true,\"blobs\"", 1);
-    assert!(serde_json::from_str::<RangeSnapshots>(&sneaky).is_err(), "unknown fields are strict-rejected");
+    assert!(json::from_str::<RangeSnapshots>(&sneaky).is_err(), "unknown fields are strict-rejected");
   }
 }

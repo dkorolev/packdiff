@@ -36,7 +36,7 @@ use std::time::Instant;
 
 #[cfg(feature = "cli")]
 use indicatif::{ProgressBar, ProgressStyle};
-use serde::{Deserialize, Serialize};
+use packdiff_dto::json::{self, Fields, FromJson, Map, ToJson, Value};
 
 /// Where [`crate::pack`] and [`crate::build_document`] report progress.
 /// Stages arrive in execution order, each entered with its full item count
@@ -59,7 +59,7 @@ impl ProgressObserver for () {}
 
 /// The phases of one run, in execution order. Serialized as the bare
 /// `CamelCase` variant name inside progress reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
   /// Resolving `BASE` and `HEAD` to commit SHAs.
   Resolve,
@@ -127,14 +127,12 @@ impl Stage {
 
 /// One machine-mode progress report. Emitted to stderr as a single-key
 /// `{ "Progress": { ...this } }` document, one per line.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct ProgressReport {
   /// The stage currently executing.
   pub stage: Stage,
   /// The current work item, human-oriented (e.g. `blob 1a2b3c4d`); absent
   /// between items.
-  #[serde(skip_serializing_if = "Option::is_none")]
   pub detail: Option<String>,
   /// Work items completed within the current stage.
   pub done: u64,
@@ -150,8 +148,65 @@ pub struct ProgressReport {
   /// Estimated milliseconds remaining, extrapolated linearly from the
   /// weighted completion so far; absent until there is progress to
   /// extrapolate from.
-  #[serde(skip_serializing_if = "Option::is_none")]
   pub eta_ms: Option<u64>,
+}
+
+impl ToJson for Stage {
+  fn to_json(&self) -> Value {
+    Value::from(format!("{self:?}"))
+  }
+}
+
+impl FromJson for Stage {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    Ok(match json::variant_name(value, "Stage")? {
+      "Resolve" => Stage::Resolve,
+      "MergeBase" => Stage::MergeBase,
+      "Diff" => Stage::Diff,
+      "Commits" => Stage::Commits,
+      "Scan" => Stage::Scan,
+      "Snapshots" => Stage::Snapshots,
+      "Render" => Stage::Render,
+      "Write" => Stage::Write,
+      "Done" => Stage::Done,
+      other => return Err(json::Error::unknown_variant(other, "Stage")),
+    })
+  }
+}
+
+impl ToJson for ProgressReport {
+  fn to_json(&self) -> Value {
+    let mut o = Map::new();
+    o.insert("stage", self.stage.to_json());
+    if let Some(detail) = &self.detail {
+      o.insert("detail", detail);
+    }
+    o.insert("done", self.done);
+    o.insert("total", self.total);
+    o.insert("percent", self.percent);
+    o.insert("elapsed_ms", self.elapsed_ms);
+    if let Some(eta_ms) = self.eta_ms {
+      o.insert("eta_ms", eta_ms);
+    }
+    Value::Object(o)
+  }
+}
+
+impl FromJson for ProgressReport {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "ProgressReport")?;
+    let report = ProgressReport {
+      stage: f.required("stage")?,
+      detail: f.optional("detail")?,
+      done: f.required("done")?,
+      total: f.required("total")?,
+      percent: f.required("percent")?,
+      elapsed_ms: f.required("elapsed_ms")?,
+      eta_ms: f.optional("eta_ms")?,
+    };
+    f.finish()?;
+    Ok(report)
+  }
 }
 
 /// `elapsed × remaining ÷ done` over the weighted position; `None` at
@@ -203,7 +258,7 @@ impl State {
 #[cfg(feature = "cli")]
 fn emit(state: &State, elapsed: Duration) {
   // Reports are liveness output: stderr only, one document per line.
-  eprintln!("{}", serde_json::json!({ "Progress": state.report(elapsed) }));
+  eprintln!("{}", Value::object([("Progress", state.report(elapsed).to_json())]));
 }
 
 /// Progress for one run. Construct once, thread through the stages, call
@@ -401,20 +456,18 @@ mod tests {
       stage_total: 12,
       position: 305,
     };
-    let value = serde_json::json!({ "Progress": state.report(Duration::from_millis(1500)) });
-    assert_eq!(
-      value,
-      serde_json::json!({ "Progress": {
-        "stage": "Snapshots", "detail": "blob 1a2b3c4d",
-        "done": 3, "total": 12, "percent": 30, "elapsed_ms": 1500, "eta_ms": 3418,
-      }})
+    let value = Value::object([("Progress", state.report(Duration::from_millis(1500)).to_json())]);
+    let expected = concat!(
+      r#"{ "Progress": { "stage": "Snapshots", "detail": "blob 1a2b3c4d", "#,
+      r#""done": 3, "total": 12, "percent": 30, "elapsed_ms": 1500, "eta_ms": 3418 } }"#
     );
+    assert_eq!(value, json::parse(expected).unwrap());
   }
 
   #[test]
   fn absent_fields_are_omitted_not_null() {
     let state = State { stage: Stage::Resolve, detail: None, stage_done: 0, stage_total: 2, position: 0 };
-    let text = serde_json::json!({ "Progress": state.report(Duration::ZERO) }).to_string();
+    let text = Value::object([("Progress", state.report(Duration::ZERO).to_json())]).to_string();
     assert!(!text.contains("detail"), "{text}");
     assert!(!text.contains("eta_ms"), "{text}");
   }
@@ -422,6 +475,6 @@ mod tests {
   #[test]
   fn report_rejects_unknown_fields() {
     let bad = r#"{ "stage": "Diff", "done": 1, "total": 7, "percent": 5, "elapsed_ms": 10, "sneaky": true }"#;
-    assert!(serde_json::from_str::<ProgressReport>(bad).is_err());
+    assert!(json::from_str::<ProgressReport>(bad).is_err());
   }
 }

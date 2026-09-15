@@ -44,6 +44,8 @@ pub mod markdown;
 pub mod review;
 pub mod snapshot;
 
+use json::{Fields, FromJson, ToJson, Value};
+
 /// Version stamped into (and required of) every document this crate touches.
 /// One generation covers both document families: v2 added the review
 /// verdict and per-comment resolution; v3 made the review merge a CRDT
@@ -55,8 +57,7 @@ pub const SCHEMA_VERSION: u32 = 3;
 pub const TOOL: &str = "packdiff";
 
 /// A named ref pinned to the commit it resolved to at build time.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefInfo {
   /// What the user asked for: branch, tag, or SHA — kept verbatim so pages
   /// and exports show the name the reviewer thinks in.
@@ -64,6 +65,21 @@ pub struct RefInfo {
   /// The full commit SHA the name resolved to; pins the document to an exact
   /// state even if the ref later moves.
   pub sha: String,
+}
+
+impl ToJson for RefInfo {
+  fn to_json(&self) -> Value {
+    Value::object([("name", &self.name), ("sha", &self.sha)])
+  }
+}
+
+impl FromJson for RefInfo {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "RefInfo")?;
+    let info = RefInfo { name: f.required("name")?, sha: f.required("sha")? };
+    f.finish()?;
+    Ok(info)
+  }
 }
 
 /// Errors surfaced by any model operation. Typed so callers branch on

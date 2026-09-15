@@ -19,9 +19,9 @@
 
 use std::alloc::{alloc, dealloc, Layout};
 
+use packdiff_dto::json::{self, Fields, FromJson, ToJson, Value};
 use packdiff_dto::review::{Comment, ReviewDocument, Verdict};
 use packdiff_dto::{export, storage_key, RefInfo};
-use serde_json::json;
 
 // ------------------------------------------------------------------ memory
 
@@ -61,16 +61,28 @@ fn pack(s: String) -> u64 {
   (ptr << 32) | len
 }
 
-fn ok(value: serde_json::Value) -> u64 {
-  pack(json!({ "Ok": value }).to_string())
+fn ok(value: impl Into<Value>) -> u64 {
+  pack(Value::object([("Ok", value.into())]).to_string())
 }
 
 fn err(message: impl std::fmt::Display) -> u64 {
-  pack(json!({ "Error": { "message": message.to_string() } }).to_string())
+  pack(Value::object([("Error", Value::object([("message", message.to_string())]))]).to_string())
 }
 
-fn doc_value(doc: &ReviewDocument) -> serde_json::Value {
-  serde_json::to_value(doc).expect("document serializes")
+/// The `(repo, base, head)` triple of [`pd_new_document`] and
+/// [`pd_storage_key`]: `{"repo": "...", "base": {"name","sha"}, "head":
+/// {"name","sha"}}`, nothing else.
+fn read_meta(text: &str) -> json::Result<(String, RefInfo, RefInfo)> {
+  let value = json::parse(text)?;
+  let mut f = Fields::of(&value, "meta")?;
+  let meta = (f.required("repo")?, f.required("base")?, f.required("head")?);
+  f.finish()?;
+  Ok(meta)
+}
+
+/// A typed request object parsed from a buffer, strictly.
+fn read_request<T: FromJson>(text: &str) -> json::Result<T> {
+  json::from_str(text)
 }
 
 // --------------------------------------------------------------------- api
@@ -79,14 +91,8 @@ fn doc_value(doc: &ReviewDocument) -> serde_json::Value {
 /// Returns a fresh empty review document.
 #[no_mangle]
 pub extern "C" fn pd_new_document(meta_ptr: *const u8, meta_len: u32) -> u64 {
-  #[derive(serde::Deserialize)]
-  struct Meta {
-    repo: String,
-    base: RefInfo,
-    head: RefInfo,
-  }
-  match serde_json::from_str::<Meta>(&read_arg(meta_ptr, meta_len)) {
-    Ok(m) => ok(doc_value(&ReviewDocument::new(m.repo, m.base, m.head))),
+  match read_meta(&read_arg(meta_ptr, meta_len)) {
+    Ok((repo, base, head)) => ok(ReviewDocument::new(repo, base, head).to_json()),
     Err(e) => err(format!("invalid meta: {e}")),
   }
 }
@@ -95,7 +101,7 @@ pub extern "C" fn pd_new_document(meta_ptr: *const u8, meta_len: u32) -> u64 {
 #[no_mangle]
 pub extern "C" fn pd_parse_document(doc_ptr: *const u8, doc_len: u32) -> u64 {
   match ReviewDocument::parse(&read_arg(doc_ptr, doc_len)) {
-    Ok(doc) => ok(doc_value(&doc)),
+    Ok(doc) => ok(doc.to_json()),
     Err(e) => err(e),
   }
 }
@@ -107,13 +113,28 @@ pub extern "C" fn pd_upsert_comment(doc_ptr: *const u8, doc_len: u32, comment_pt
     Ok(d) => d,
     Err(e) => return err(e),
   };
-  let comment: Comment = match serde_json::from_str(&read_arg(comment_ptr, comment_len)) {
+  let comment: Comment = match read_request(&read_arg(comment_ptr, comment_len)) {
     Ok(c) => c,
     Err(e) => return err(format!("invalid comment: {e}")),
   };
   match doc.upsert(comment) {
-    Ok(()) => ok(doc_value(&doc)),
+    Ok(()) => ok(doc.to_json()),
     Err(e) => err(e),
+  }
+}
+
+/// `{"id": "…", "actor": "…"}` — the request of [`pd_delete_comment`].
+struct DeleteRequest {
+  id: String,
+  actor: String,
+}
+
+impl FromJson for DeleteRequest {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "delete request")?;
+    let req = DeleteRequest { id: f.required("id")?, actor: f.or_default("actor")? };
+    f.finish()?;
+    Ok(req)
   }
 }
 
@@ -123,23 +144,32 @@ pub extern "C" fn pd_upsert_comment(doc_ptr: *const u8, doc_len: u32, comment_pt
 /// deleting a missing id is not an error.
 #[no_mangle]
 pub extern "C" fn pd_delete_comment(doc_ptr: *const u8, doc_len: u32, req_ptr: *const u8, req_len: u32) -> u64 {
-  #[derive(serde::Deserialize)]
-  #[serde(deny_unknown_fields)]
-  struct DeleteRequest {
-    id: String,
-    #[serde(default)]
-    actor: String,
-  }
   let mut doc = match ReviewDocument::parse(&read_arg(doc_ptr, doc_len)) {
     Ok(d) => d,
     Err(e) => return err(e),
   };
-  let req: DeleteRequest = match serde_json::from_str(&read_arg(req_ptr, req_len)) {
+  let req: DeleteRequest = match read_request(&read_arg(req_ptr, req_len)) {
     Ok(r) => r,
     Err(e) => return err(format!("invalid delete request: {e}")),
   };
   doc.delete_by(&req.id, &req.actor);
-  ok(doc_value(&doc))
+  ok(doc.to_json())
+}
+
+/// `{"verdict": <union or null>, "actor": "…"}` — the request of
+/// [`pd_set_verdict`].
+struct VerdictRequest {
+  verdict: Option<Verdict>,
+  actor: String,
+}
+
+impl FromJson for VerdictRequest {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "verdict request")?;
+    let req = VerdictRequest { verdict: f.optional("verdict")?, actor: f.or_default("actor")? };
+    f.finish()?;
+    Ok(req)
+  }
 }
 
 /// Set, replace, or clear the review verdict. The request is JSON —
@@ -150,23 +180,16 @@ pub extern "C" fn pd_delete_comment(doc_ptr: *const u8, doc_len: u32, req_ptr: *
 /// updated document.
 #[no_mangle]
 pub extern "C" fn pd_set_verdict(doc_ptr: *const u8, doc_len: u32, req_ptr: *const u8, req_len: u32) -> u64 {
-  #[derive(serde::Deserialize)]
-  #[serde(deny_unknown_fields)]
-  struct VerdictRequest {
-    verdict: Option<Verdict>,
-    #[serde(default)]
-    actor: String,
-  }
   let mut doc = match ReviewDocument::parse(&read_arg(doc_ptr, doc_len)) {
     Ok(d) => d,
     Err(e) => return err(e),
   };
-  let req: VerdictRequest = match serde_json::from_str(&read_arg(req_ptr, req_len)) {
+  let req: VerdictRequest = match read_request(&read_arg(req_ptr, req_len)) {
     Ok(r) => r,
     Err(e) => return err(format!("invalid verdict request: {e}")),
   };
   match doc.set_verdict_by(req.verdict, &req.actor) {
-    Ok(()) => ok(doc_value(&doc)),
+    Ok(()) => ok(doc.to_json()),
     Err(e) => err(e),
   }
 }
@@ -185,13 +208,13 @@ pub extern "C" fn pd_merge(doc_ptr: *const u8, doc_len: u32, incoming_ptr: *cons
     Err(e) => return err(format!("import rejected: {e}")),
   };
   doc.merge(&incoming);
-  ok(doc_value(&doc))
+  ok(doc.to_json())
 }
 
 #[no_mangle]
 pub extern "C" fn pd_export_json(doc_ptr: *const u8, doc_len: u32) -> u64 {
   match ReviewDocument::parse(&read_arg(doc_ptr, doc_len)) {
-    Ok(doc) => ok(serde_json::Value::String(export::to_json(&doc))),
+    Ok(doc) => ok(export::to_json(&doc)),
     Err(e) => err(e),
   }
 }
@@ -199,7 +222,7 @@ pub extern "C" fn pd_export_json(doc_ptr: *const u8, doc_len: u32) -> u64 {
 #[no_mangle]
 pub extern "C" fn pd_export_markdown(doc_ptr: *const u8, doc_len: u32) -> u64 {
   match ReviewDocument::parse(&read_arg(doc_ptr, doc_len)) {
-    Ok(doc) => ok(serde_json::Value::String(export::to_markdown(&doc))),
+    Ok(doc) => ok(export::to_markdown(&doc)),
     Err(e) => err(e),
   }
 }
@@ -207,8 +230,24 @@ pub extern "C" fn pd_export_markdown(doc_ptr: *const u8, doc_len: u32) -> u64 {
 #[no_mangle]
 pub extern "C" fn pd_export_csv(doc_ptr: *const u8, doc_len: u32) -> u64 {
   match ReviewDocument::parse(&read_arg(doc_ptr, doc_len)) {
-    Ok(doc) => ok(serde_json::Value::String(export::to_csv(&doc))),
+    Ok(doc) => ok(export::to_csv(&doc)),
     Err(e) => err(e),
+  }
+}
+
+/// `{"from": N, "to": N, "context": N}` — the request of [`pd_range_diff`].
+struct RangeParams {
+  from: usize,
+  to: usize,
+  context: usize,
+}
+
+impl FromJson for RangeParams {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "params")?;
+    let params = RangeParams { from: f.required("from")?, to: f.required("to")?, context: f.required("context")? };
+    f.finish()?;
+    Ok(params)
   }
 }
 
@@ -219,24 +258,42 @@ pub extern "C" fn pd_export_csv(doc_ptr: *const u8, doc_len: u32) -> u64 {
 /// the `FileDiff` array — the same shape the build-time parser emits.
 #[no_mangle]
 pub extern "C" fn pd_range_diff(snap_ptr: *const u8, snap_len: u32, params_ptr: *const u8, params_len: u32) -> u64 {
-  #[derive(serde::Deserialize)]
-  #[serde(deny_unknown_fields)]
-  struct Params {
-    from: usize,
-    to: usize,
-    context: usize,
-  }
-  let snap: packdiff_dto::snapshot::RangeSnapshots = match serde_json::from_str(&read_arg(snap_ptr, snap_len)) {
+  let snap: packdiff_dto::snapshot::RangeSnapshots = match read_request(&read_arg(snap_ptr, snap_len)) {
     Ok(s) => s,
     Err(e) => return err(format!("invalid snapshots: {e}")),
   };
-  let params: Params = match serde_json::from_str(&read_arg(params_ptr, params_len)) {
+  let params: RangeParams = match read_request(&read_arg(params_ptr, params_len)) {
     Ok(p) => p,
     Err(e) => return err(format!("invalid params: {e}")),
   };
   match packdiff_dto::snapshot::range_diff(&snap, params.from, params.to, params.context) {
-    Ok(files) => ok(serde_json::to_value(files).expect("FileDiff serializes: no non-string keys")),
+    Ok(files) => ok(files.to_json()),
     Err(e) => err(e),
+  }
+}
+
+/// `{"old_path", "new_path", "old_start", "new_start", "count"}` — the
+/// request of [`pd_context_slice`].
+struct SliceParams {
+  old_path: String,
+  new_path: String,
+  old_start: u32,
+  new_start: u32,
+  count: u32,
+}
+
+impl FromJson for SliceParams {
+  fn from_json(value: &Value) -> json::Result<Self> {
+    let mut f = Fields::of(value, "params")?;
+    let params = SliceParams {
+      old_path: f.required("old_path")?,
+      new_path: f.required("new_path")?,
+      old_start: f.required("old_start")?,
+      new_start: f.required("new_start")?,
+      count: f.required("count")?,
+    };
+    f.finish()?;
+    Ok(params)
   }
 }
 
@@ -248,20 +305,11 @@ pub extern "C" fn pd_range_diff(snap_ptr: *const u8, snap_len: u32, params_ptr: 
 /// that is not identical at both endpoints is rejected.
 #[no_mangle]
 pub extern "C" fn pd_context_slice(snap_ptr: *const u8, snap_len: u32, params_ptr: *const u8, params_len: u32) -> u64 {
-  #[derive(serde::Deserialize)]
-  #[serde(deny_unknown_fields)]
-  struct Params {
-    old_path: String,
-    new_path: String,
-    old_start: u32,
-    new_start: u32,
-    count: u32,
-  }
-  let snap: packdiff_dto::snapshot::RangeSnapshots = match serde_json::from_str(&read_arg(snap_ptr, snap_len)) {
+  let snap: packdiff_dto::snapshot::RangeSnapshots = match read_request(&read_arg(snap_ptr, snap_len)) {
     Ok(s) => s,
     Err(e) => return err(format!("invalid snapshots: {e}")),
   };
-  let params: Params = match serde_json::from_str(&read_arg(params_ptr, params_len)) {
+  let params: SliceParams = match read_request(&read_arg(params_ptr, params_len)) {
     Ok(p) => p,
     Err(e) => return err(format!("invalid params: {e}")),
   };
@@ -273,7 +321,7 @@ pub extern "C" fn pd_context_slice(snap_ptr: *const u8, snap_len: u32, params_pt
     params.new_start,
     params.count,
   ) {
-    Ok(lines) => ok(serde_json::to_value(lines).expect("Line serializes: no non-string keys")),
+    Ok(lines) => ok(lines.to_json()),
     Err(e) => err(e),
   }
 }
@@ -283,7 +331,7 @@ pub extern "C" fn pd_context_slice(snap_ptr: *const u8, snap_len: u32, params_pt
 /// and `Ok` carries the HTML string. Never fails on any input.
 #[no_mangle]
 pub extern "C" fn pd_markdown_html(text_ptr: *const u8, text_len: u32) -> u64 {
-  ok(serde_json::Value::String(packdiff_dto::markdown::to_html(&read_arg(text_ptr, text_len))))
+  ok(packdiff_dto::markdown::to_html(&read_arg(text_ptr, text_len)))
 }
 
 /// Highlight a contiguous source-line run. `lines` is a JSON string array;
@@ -291,12 +339,12 @@ pub extern "C" fn pd_markdown_html(text_ptr: *const u8, text_len: u32) -> u64 {
 #[no_mangle]
 pub extern "C" fn pd_highlight_lines(path_ptr: *const u8, path_len: u32, lines_ptr: *const u8, lines_len: u32) -> u64 {
   let path = read_arg(path_ptr, path_len);
-  let lines: Vec<String> = match serde_json::from_str(&read_arg(lines_ptr, lines_len)) {
+  let lines: Vec<String> = match read_request(&read_arg(lines_ptr, lines_len)) {
     Ok(lines) => lines,
     Err(e) => return err(format!("invalid lines: {e}")),
   };
   let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-  ok(serde_json::to_value(packdiff_dto::highlight::highlight_lines(&path, &refs)).expect("highlighted lines serialize"))
+  ok(packdiff_dto::highlight::highlight_lines(&path, &refs).to_json())
 }
 
 /// Highlight a typed diff hunk with independent old/new lexer streams.
@@ -305,11 +353,11 @@ pub extern "C" fn pd_highlight_lines(path_ptr: *const u8, path_len: u32, lines_p
 #[no_mangle]
 pub extern "C" fn pd_highlight_hunk(path_ptr: *const u8, path_len: u32, lines_ptr: *const u8, lines_len: u32) -> u64 {
   let path = read_arg(path_ptr, path_len);
-  let lines: Vec<packdiff_dto::diff::Line> = match serde_json::from_str(&read_arg(lines_ptr, lines_len)) {
+  let lines: Vec<packdiff_dto::diff::Line> = match read_request(&read_arg(lines_ptr, lines_len)) {
     Ok(lines) => lines,
     Err(e) => return err(format!("invalid hunk lines: {e}")),
   };
-  ok(serde_json::to_value(packdiff_dto::highlight::highlight_hunk(&path, &lines)).expect("highlighted hunk serializes"))
+  ok(packdiff_dto::highlight::highlight_hunk(&path, &lines).to_json())
 }
 
 /// `meta` as in [`pd_new_document`]; returns the legacy SHA-pinned
@@ -317,14 +365,8 @@ pub extern "C" fn pd_highlight_hunk(path_ptr: *const u8, path_len: u32, lines_pt
 /// `review_id` and call this once to migrate pre-`review_id` state.
 #[no_mangle]
 pub extern "C" fn pd_storage_key(meta_ptr: *const u8, meta_len: u32) -> u64 {
-  #[derive(serde::Deserialize)]
-  struct Meta {
-    repo: String,
-    base: RefInfo,
-    head: RefInfo,
-  }
-  match serde_json::from_str::<Meta>(&read_arg(meta_ptr, meta_len)) {
-    Ok(m) => ok(serde_json::Value::String(storage_key(&m.repo, &m.base.sha, &m.head.sha))),
+  match read_meta(&read_arg(meta_ptr, meta_len)) {
+    Ok((repo, base, head)) => ok(storage_key(&repo, &base.sha, &head.sha)),
     Err(e) => err(format!("invalid meta: {e}")),
   }
 }
