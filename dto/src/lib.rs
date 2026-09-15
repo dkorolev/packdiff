@@ -39,6 +39,7 @@
 pub mod diff;
 pub mod export;
 pub mod highlight;
+pub mod json;
 pub mod markdown;
 pub mod review;
 pub mod snapshot;
