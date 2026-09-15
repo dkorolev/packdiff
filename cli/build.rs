@@ -1,25 +1,25 @@
-//! Build the packdiff wasm comment engine and hand its artifact path to the
-//! CLI via the PACKDIFF_WASM_PATH env, so `cargo build`, `cargo test`, and
+//! Hand the packdiff wasm comment engine to the crate via the
+//! `PACKDIFF_WASM_PATH` rustc-env, so that `cargo build`, `cargo test`, and
 //! `cargo install` are self-sufficient.
 //!
 //! Two modes:
 //!
 //! - **Workspace** (git checkout): the sibling `../wasm` crate exists — build
-//!   it directly, into a SEPARATE --target-dir (target-wasm/) so the nested
-//!   cargo cannot deadlock against the outer cargo's lock on target/.
-//! - **Packaged** (crates.io tarball: no sibling crate): generate a minimal
-//!   cdylib shim project in OUT_DIR that links `packdiff-wasm` from the
-//!   registry (version-pinned to this crate's own version) and build that.
-//!   The shim's only job is to trigger the cdylib link; the `#[no_mangle]`
-//!   `pd_*` exports come from the linked crate.
-//!
-//! Env overrides (mainly for pre-publish verification):
-//! - PACKDIFF_WASM_FORCE_SHIM=1 — use the shim even in a checkout.
-//! - PACKDIFF_WASM_SRC=<dir>    — shim depends on that path instead of the registry.
+//!   it for `wasm32-unknown-unknown`, into a SEPARATE --target-dir
+//!   (target-wasm/) so the nested cargo cannot deadlock against the outer
+//!   cargo's lock on target/. This is the only mode that needs the wasm target.
+//! - **Packaged** (crates.io tarball: no sibling crate): the engine ships
+//!   inside the tarball as `engine/packdiff_wasm.wasm`, staged there by
+//!   `./stage-engine.sh` right before `cargo package`/`cargo publish`. Nothing
+//!   is compiled for wasm, so `cargo install packdiff` — and any crate that
+//!   depends on `packdiff` — builds on a plain stable toolchain.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Where `./stage-engine.sh` puts the engine, relative to this crate's root.
+const STAGED_ENGINE: &str = "engine/packdiff_wasm.wasm";
 
 fn main() {
   // docs.rs builds run with no network and no wasm32 target, so the engine
@@ -33,95 +33,42 @@ fn main() {
   }
 
   let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-  let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+  let sibling = manifest.parent().map(Path::to_path_buf).filter(|ws| ws.join("wasm/Cargo.toml").is_file());
 
-  let workspace = manifest.parent().map(|p| p.to_path_buf());
-  let sibling = workspace.clone().filter(|ws| ws.join("wasm/Cargo.toml").is_file());
-  let force_shim = env::var_os("PACKDIFF_WASM_FORCE_SHIM").is_some();
-
-  let wasm = match (&sibling, force_shim) {
-    (Some(ws), false) => build_in_workspace(&cargo, ws),
-    _ => build_via_shim(&cargo),
+  let wasm = match sibling {
+    Some(ws) => {
+      let wasm = build_in_workspace(&ws);
+      println!("cargo:rerun-if-changed={}", ws.join("wasm/src").display());
+      println!("cargo:rerun-if-changed={}", ws.join("dto/src").display());
+      wasm
+    }
+    None => {
+      let staged = manifest.join(STAGED_ENGINE);
+      assert!(
+        staged.is_file(),
+        "no compiled engine at {}: this tarball was packaged without running ./stage-engine.sh first",
+        staged.display()
+      );
+      println!("cargo:rerun-if-changed={}", staged.display());
+      staged
+    }
   };
   assert!(wasm.is_file(), "expected wasm artifact at {}", wasm.display());
   println!("cargo:rustc-env=PACKDIFF_WASM_PATH={}", wasm.display());
-
-  if let Some(ws) = &sibling {
-    println!("cargo:rerun-if-changed={}", ws.join("wasm/src").display());
-    println!("cargo:rerun-if-changed={}", ws.join("dto/src").display());
-  }
-  println!("cargo:rerun-if-env-changed=PACKDIFF_WASM_FORCE_SHIM");
-  println!("cargo:rerun-if-env-changed=PACKDIFF_WASM_SRC");
 }
 
-fn run(cmd: &mut Command, what: &str) {
-  let status = cmd.status().unwrap_or_else(|e| panic!("failed to invoke cargo for {what}: {e}"));
+fn build_in_workspace(workspace: &Path) -> PathBuf {
+  let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+  let target_dir = workspace.join("target-wasm");
+  let status = Command::new(cargo)
+    .current_dir(workspace)
+    .args(["build", "-p", "packdiff-wasm", "--release", "--target", "wasm32-unknown-unknown", "--target-dir"])
+    .arg(&target_dir)
+    .status()
+    .unwrap_or_else(|e| panic!("failed to invoke cargo for packdiff-wasm: {e}"));
   assert!(
     status.success(),
-    "{what} build failed — is the wasm target installed? (rustup target add wasm32-unknown-unknown)"
-  );
-}
-
-fn build_in_workspace(cargo: &str, workspace: &std::path::Path) -> PathBuf {
-  let target_dir = workspace.join("target-wasm");
-  run(
-    Command::new(cargo)
-      .current_dir(workspace)
-      .args(["build", "-p", "packdiff-wasm", "--release", "--target", "wasm32-unknown-unknown", "--target-dir"])
-      .arg(&target_dir),
-    "packdiff-wasm",
+    "packdiff-wasm build failed — is the wasm target installed? (rustup target add wasm32-unknown-unknown)"
   );
   target_dir.join("wasm32-unknown-unknown/release/packdiff_wasm.wasm")
-}
-
-fn build_via_shim(cargo: &str) -> PathBuf {
-  let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-  let shim = out_dir.join("wasm-shim");
-  std::fs::create_dir_all(shim.join("src")).expect("create shim dir");
-
-  let dep = match env::var("PACKDIFF_WASM_SRC") {
-    Ok(path) => format!("packdiff-wasm = {{ path = {path:?} }}"),
-    Err(_) => format!("packdiff-wasm = \"={}\"", env!("CARGO_PKG_VERSION")),
-  };
-  std::fs::write(
-    shim.join("Cargo.toml"),
-    format!(
-      r#"[package]
-name = "packdiff-wasm-shim"
-version = "0.0.0"
-edition = "2021"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-{dep}
-
-[profile.release]
-opt-level = "z"
-lto = true
-panic = "abort"
-strip = true
-codegen-units = 1
-
-[workspace]
-"#
-    ),
-  )
-  .expect("write shim Cargo.toml");
-  std::fs::write(
-    shim.join("src/lib.rs"),
-    "// Link packdiff-wasm into a cdylib; its #[no_mangle] pd_* symbols are the API.\n\
-     pub use packdiff_wasm::*;\n",
-  )
-  .expect("write shim lib.rs");
-
-  run(
-    Command::new(cargo)
-      .current_dir(&shim)
-      .args(["build", "--release", "--target", "wasm32-unknown-unknown", "--target-dir"])
-      .arg(shim.join("target")),
-    "packdiff-wasm (shim)",
-  );
-  shim.join("target/wasm32-unknown-unknown/release/packdiff_wasm_shim.wasm")
 }

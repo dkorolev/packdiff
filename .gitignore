@@ -1,6 +1,8 @@
-# Build artifacts (rebuildable via ./build.sh) and generated pages.
+# Build artifacts (cargo rebuilds them) and generated pages.
 /target/
 /target-wasm/
+# The compiled engine, staged for packaging by ./stage-engine.sh.
+/cli/engine/
 out/
 packdiff-*.html
 node_modules/

@@ -60,11 +60,15 @@ jobs:
           done
           echo "missing=$missing" >> "$GITHUB_OUTPUT"
 
-      # Publishing `packdiff` (the cli crate) verify-builds it, and its build script
-      # compiles the inlined comment engine for wasm32-unknown-unknown.
+      # The `packdiff` (cli) tarball ships the compiled comment engine, staged into the
+      # crate here, so the published crate builds without the wasm target.
       - name: Install the wasm target
         if: steps.todo.outputs.missing != ''
         run: rustup target add wasm32-unknown-unknown
+
+      - name: Stage the compiled engine into the cli crate
+        if: steps.todo.outputs.missing != ''
+        run: ./stage-engine.sh
 
       - name: Mint a short-lived crates.io token (Trusted Publishing)
         if: steps.todo.outputs.missing != ''
@@ -76,8 +80,14 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
+          # `--allow-dirty` for the cli crate only: cargo counts the staged engine as an
+          # uncommitted file (gitignored, but in the package list); the checkout is clean.
           for crate in ${{ steps.todo.outputs.missing }}; do
-            cargo publish -p "$crate"
+            if [ "$crate" = packdiff ]; then
+              cargo publish -p "$crate" --allow-dirty
+            else
+              cargo publish -p "$crate"
+            fi
           done
 
       - name: Tag the release on GitHub

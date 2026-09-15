@@ -9,9 +9,10 @@
 //! `default-features = false` to drop the binary-only terminal machinery
 //! (`indicatif`).
 //!
-//! Requirements: `git` on `PATH` at run time, and the
-//! `wasm32-unknown-unknown` target at build time — the page's comment engine
-//! is compiled into this crate (see the README's install section).
+//! Requirements: `git` on `PATH` at run time. The page's comment engine is
+//! inlined into this crate: the crates.io release ships it precompiled, and a
+//! build from a checkout compiles it, which needs the `wasm32-unknown-unknown`
+//! target (see the README's install section).
 //!
 //! The data model lives in its own pure-logic crate and is re-exported here
 //! as [`dto`], so callers need no separate version-matched `packdiff-dto`

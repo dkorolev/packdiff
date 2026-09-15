@@ -12,9 +12,8 @@ categories.workspace = true
 description = "WASM ABI over packdiff-dto: packdiff's in-page comment engine. No wasm-bindgen — plain C ABI over UTF-8 JSON buffers."
 
 [lib]
-# cdylib is the shipped artifact; rlib lets the packaged `packdiff` crate's
-# build script link this crate into its wasm shim (see cli/build.rs).
-crate-type = ["cdylib", "rlib"]
+# The shipped artifact is the cdylib; cli/build.rs builds it and inlines it.
+crate-type = ["cdylib"]
 
 [dependencies]
 packdiff-dto = { workspace = true }
