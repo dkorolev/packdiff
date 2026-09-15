@@ -18,11 +18,11 @@ jobs:
       - name: Full test pass (fmt, debug tests, release tests, wasm ABI)
         run: ./test.sh
 
-  # The crates.io install path. Package all three crates and verify-build the
-  # tarballs — inside a tarball there is no sibling wasm/ crate, so the cli's
-  # build script takes its registry-shim path, exactly as `cargo install
-  # packdiff` will (PACKDIFF_WASM_SRC points the shim at the local wasm crate
-  # because the PR's version is not on the registry yet; see PUBLISHING.md).
+  # The crates.io install path. Stage the compiled engine, package all three
+  # crates and verify-build the tarballs — inside a tarball there is no sibling
+  # wasm/ crate, so the cli's build script uses the staged engine, exactly as
+  # `cargo install packdiff` will. Then prove the promise that install makes:
+  # with the wasm target removed, the packaged crate still installs and runs.
   # Merging auto-publishes, so works-from-checkout-only regressions must be
   # caught here, not by a failed release.
   package:
@@ -31,8 +31,21 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install the wasm target
         run: rustup target add wasm32-unknown-unknown
+      - name: Stage the compiled engine into the cli crate
+        run: ./stage-engine.sh
+      # `--allow-dirty`: cargo counts the staged engine as an uncommitted file (it is
+      # gitignored, but it is in the package list); the checkout itself is clean.
       - name: Package and verify-build the three crate tarballs
-        run: PACKDIFF_WASM_SRC=$PWD/wasm cargo package --workspace
+        run: cargo package --workspace --allow-dirty
+      # The tarball asks the registry for `packdiff-dto` at the PR's version, which is
+      # not published yet, so that one dependency is patched to the local checkout.
+      - name: Install the packaged cli crate on a toolchain without the wasm target
+        run: |
+          rustup target remove wasm32-unknown-unknown
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          cargo install --path "target/package/packdiff-$version" --root "$RUNNER_TEMP/packdiff-install" \
+            --config "patch.crates-io.packdiff-dto.path=\"$PWD/dto\""
+          "$RUNNER_TEMP/packdiff-install/bin/packdiff" --version
 
   # The published API contract: packdiff-dto's public API must stay
   # semver-compatible with the latest crates.io release. The version ladder

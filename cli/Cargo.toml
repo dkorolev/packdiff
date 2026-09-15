@@ -10,6 +10,10 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Pack a git diff into one self-contained HTML review page — with local, exportable review comments."
+# Listed explicitly so the tarball can carry `engine/packdiff_wasm.wasm`, the
+# compiled comment engine that `./stage-engine.sh` puts there right before
+# packaging (it is gitignored, and an explicit list is the only way past that).
+include = ["build.rs", "src/**", "assets/**", "examples/**", "tests/**", "engine/packdiff_wasm.wasm"]
 
 [features]
 # The binary and its terminal progress machinery (`indicatif`). On by
