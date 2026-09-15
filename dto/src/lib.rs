@@ -84,13 +84,11 @@ impl FromJson for RefInfo {
 
 /// Errors surfaced by any model operation. Typed so callers branch on
 /// variants; the WASM ABI ships them as `{ "Error": { "message": ... } }`.
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ModelError {
   /// Input was not valid JSON for the expected shape.
-  #[error("invalid JSON: {0}")]
   Json(String),
   /// Document is from a newer schema than this build understands.
-  #[error("unsupported schema_version {found} (this build supports up to {supported})")]
   UnsupportedSchema {
     /// The `schema_version` the document claims.
     found: u32,
@@ -98,16 +96,29 @@ pub enum ModelError {
     supported: u32,
   },
   /// A comment failed validation.
-  #[error("invalid comment: {0}")]
   InvalidComment(String),
   /// A review verdict failed validation.
-  #[error("invalid verdict: {0}")]
   InvalidVerdict(String),
   /// A commit-range request did not match the snapshot store (bad boundary
   /// indices, or a boundary referencing a blob the store does not carry).
-  #[error("invalid snapshot range: {0}")]
   InvalidRange(String),
 }
+
+impl std::fmt::Display for ModelError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      ModelError::Json(e) => write!(f, "invalid JSON: {e}"),
+      ModelError::UnsupportedSchema { found, supported } => {
+        write!(f, "unsupported schema_version {found} (this build supports up to {supported})")
+      }
+      ModelError::InvalidComment(e) => write!(f, "invalid comment: {e}"),
+      ModelError::InvalidVerdict(e) => write!(f, "invalid verdict: {e}"),
+      ModelError::InvalidRange(e) => write!(f, "invalid snapshot range: {e}"),
+    }
+  }
+}
+
+impl std::error::Error for ModelError {}
 
 /// The LEGACY localStorage key a review document was filed under, exposed to
 /// the page as `pd_storage_key` and consulted once per load to migrate old

@@ -29,5 +29,4 @@ required-features = ["cli"]
 
 [dependencies]
 packdiff-dto = { workspace = true }
-thiserror = { workspace = true }
 indicatif = { version = "0.17", optional = true }

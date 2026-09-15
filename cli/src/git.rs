@@ -33,18 +33,16 @@ pub static VERBOSE: AtomicBool = AtomicBool::new(false);
 /// from the same value. See `help exitcodes`. Re-exported as the library's
 /// [`crate::Error`]; `#[non_exhaustive]` because new failure modes may be
 /// added without a breaking release.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum CliError {
   /// The invocation itself was malformed (exit 2, stage `usage`).
-  #[error("{message}")]
   Usage {
     /// Human-readable description of what was wrong with the invocation.
     message: String,
   },
   /// A non-canonical invocation was refused in machine mode (exit 2, stage
   /// `usage`). Machines must use canonical syntax; see the CLI principles.
-  #[error("non-canonical invocation {given:?}; use the canonical form {canonical:?}")]
   NonCanonical {
     /// What the caller wrote.
     given: String,
@@ -52,13 +50,11 @@ pub enum CliError {
     canonical: String,
   },
   /// `--repo` does not point inside a git work tree (exit 3, stage `repo`).
-  #[error("not a git repository: {repo}")]
   NotAGitRepository {
     /// The offending path, verbatim.
     repo: String,
   },
   /// A ref did not resolve to a commit (exit 4, stage `ref`).
-  #[error("unknown ref in {repo:?}: {name}")]
   UnknownRef {
     /// The repository the lookup ran in.
     repo: String,
@@ -66,18 +62,31 @@ pub enum CliError {
     name: String,
   },
   /// git itself failed, hung (watchdog), or emitted garbage (exit 5, stage `git`).
-  #[error("{message}")]
   Git {
     /// git's stderr, or a description of the failure.
     message: String,
   },
   /// A local I/O failure — cannot write output and the like (exit 5, stage `io`).
-  #[error("{message}")]
   Io {
     /// Description including the path involved.
     message: String,
   },
 }
+
+impl std::fmt::Display for CliError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      CliError::Usage { message } | CliError::Git { message } | CliError::Io { message } => f.write_str(message),
+      CliError::NonCanonical { given, canonical } => {
+        write!(f, "non-canonical invocation {given:?}; use the canonical form {canonical:?}")
+      }
+      CliError::NotAGitRepository { repo } => write!(f, "not a git repository: {repo}"),
+      CliError::UnknownRef { repo, name } => write!(f, "unknown ref in {repo:?}: {name}"),
+    }
+  }
+}
+
+impl std::error::Error for CliError {}
 
 impl CliError {
   /// The process exit code for this error. Documented in `help exitcodes`.

@@ -16,7 +16,6 @@ keywords = ["git", "diff", "code-review", "html", "wasm"]
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
-thiserror = "2.0"
 # The internal library, pinned once here so its version lives in a single
 # place. `path` is used inside the workspace; `version` is what a published
 # crate depends on (cargo strips the path when publishing). Bump this in
