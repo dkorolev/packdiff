@@ -1,9 +1,9 @@
 //! Live progress for one packdiff run. Two backends behind one API, chosen
 //! by the CLI's machine flag:
 //!
-//! - **Human** (terminal): an `indicatif` bar on stderr showing the stage,
-//!   a percentage, and the estimated time remaining. indicatif hides itself
-//!   when stderr is not a terminal, so redirected runs stay clean.
+//! - **Human** (terminal): a bar redrawn in place on stderr showing the
+//!   stage, a percentage, and the estimated time remaining. It is drawn only
+//!   when stderr is a terminal, so redirected runs stay clean.
 //! - **Machine**: one `{ "Progress": { ... } }` JSON document per line on
 //!   stderr — immediately at every stage change and at least once per second
 //!   in between — so a harness always knows the stage, the counts, the
@@ -19,9 +19,9 @@
 //! slow the bar down, but never moves it backwards.
 //!
 //! Library callers see only [`ProgressObserver`] (and the [`Stage`] /
-//! [`ProgressReport`] vocabulary): [`Progress`] and its `indicatif`
-//! dependency are the CLI's implementation, behind the default `cli`
-//! feature. `&()` is the silent observer.
+//! [`ProgressReport`] vocabulary): [`Progress`] is the CLI's
+//! implementation, behind the default `cli` feature. `&()` is the silent
+//! observer.
 
 #[cfg(feature = "cli")]
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
@@ -34,8 +34,6 @@ use std::time::Duration;
 #[cfg(feature = "cli")]
 use std::time::Instant;
 
-#[cfg(feature = "cli")]
-use indicatif::{ProgressBar, ProgressStyle};
 use packdiff_dto::json::{self, Fields, FromJson, Map, ToJson, Value};
 
 /// Where [`crate::pack`] and [`crate::build_document`] report progress.
@@ -261,6 +259,64 @@ fn emit(state: &State, elapsed: Duration) {
   eprintln!("{}", Value::object([("Progress", state.report(elapsed).to_json())]));
 }
 
+/// Width of the bar's message area; longer labels are cut with an ellipsis.
+#[cfg(any(feature = "cli", test))]
+const LABEL_WIDTH: usize = 24;
+/// Width of the bar itself, in cells.
+#[cfg(any(feature = "cli", test))]
+const BAR_WIDTH: u64 = 32;
+/// The spinner's frames, advanced once per redraw.
+#[cfg(any(feature = "cli", test))]
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// The human bar's one line, without the carriage return that redraws it
+/// in place: spinner, stage (and item) label, the bar, the percentage, and
+/// the ETA — the same shape as before, drawn in-house.
+#[cfg(any(feature = "cli", test))]
+fn bar_line(state: &State, elapsed: Duration, frame: usize) -> String {
+  let report = state.report(elapsed);
+  let label = match &state.detail {
+    Some(detail) => format!("{}: {detail}", state.stage.label()),
+    None => state.stage.label().to_string(),
+  };
+  let label: String = if label.chars().count() > LABEL_WIDTH {
+    label.chars().take(LABEL_WIDTH - 1).chain(std::iter::once('…')).collect()
+  } else {
+    label
+  };
+  let filled = (state.position.min(SCALE) * BAR_WIDTH / SCALE) as usize;
+  let bar: String =
+    std::iter::repeat('█').take(filled).chain(std::iter::repeat('·').take(BAR_WIDTH as usize - filled)).collect();
+  let eta = match report.eta_ms {
+    Some(ms) if ms >= 60_000 => format!("{}m {}s", ms / 60_000, ms % 60_000 / 1000),
+    Some(ms) => format!("{}s", ms / 1000),
+    None => "-".to_string(),
+  };
+  format!("{} {label:<LABEL_WIDTH$} {bar} {:>3}% eta {eta}", SPINNER[frame % SPINNER.len()], report.percent)
+}
+
+#[cfg(feature = "cli")]
+fn draw(state: &State, elapsed: Duration, frame: usize) {
+  use std::io::Write;
+  // Clear the line, then redraw from its start: the bar always occupies the
+  // one line it started on.
+  let mut stderr = std::io::stderr().lock();
+  let _ = write!(stderr, "\r\x1b[2K{}", bar_line(state, elapsed, frame));
+  let _ = stderr.flush();
+}
+
+/// Which backend a run reports through.
+#[cfg(feature = "cli")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Backend {
+  /// One `Progress` document per line on stderr.
+  Machine,
+  /// A bar redrawn in place on stderr, which is a terminal.
+  Bar,
+  /// stderr is redirected: nothing is drawn.
+  Silent,
+}
+
 /// Progress for one run. Construct once, thread through the stages, call
 /// [`Progress::finish`] on success; dropping it (e.g. on an error path)
 /// stops the ticker and clears the bar without emitting a `Done` report.
@@ -268,7 +324,7 @@ fn emit(state: &State, elapsed: Duration) {
 pub struct Progress {
   started: Instant,
   state: Arc<Mutex<State>>,
-  bar: Option<ProgressBar>,
+  backend: Backend,
   /// Dropping the sender wakes and ends the ticker thread immediately —
   /// no up-to-a-second exit lag on error paths.
   ticker_stop: Option<Sender<()>>,
@@ -288,30 +344,38 @@ impl ProgressObserver for Progress {
 #[cfg(feature = "cli")]
 impl Progress {
   pub fn new(machine: bool) -> Self {
+    use std::io::IsTerminal;
     let state =
       Arc::new(Mutex::new(State { stage: Stage::Resolve, detail: None, stage_done: 0, stage_total: 0, position: 0 }));
     let started = Instant::now();
-    if machine {
-      let (tx, rx) = channel::<()>();
-      let ticker_state = Arc::clone(&state);
-      let ticker = std::thread::spawn(move || {
+    let backend = if machine {
+      Backend::Machine
+    } else if std::io::stderr().is_terminal() {
+      Backend::Bar
+    } else {
+      Backend::Silent
+    };
+    // The ticker is the cadence in both live backends: machine mode reports
+    // at least once per second, the bar redraws (and spins) ten times per
+    // second. Stage changes are reported eagerly on top of that.
+    let (tx, rx) = channel::<()>();
+    let ticker_state = Arc::clone(&state);
+    let ticker = match backend {
+      Backend::Machine => Some(std::thread::spawn(move || {
         while let Err(RecvTimeoutError::Timeout) = rx.recv_timeout(Duration::from_secs(1)) {
           emit(&ticker_state.lock().expect("no thread panics while holding this lock"), started.elapsed());
         }
-      });
-      Self { started, state, bar: None, ticker_stop: Some(tx), ticker: Some(ticker) }
-    } else {
-      // Draws to stderr by default; auto-hidden when stderr is not a tty.
-      // Fixed length: the weighted position moves through 0..=SCALE, so the
-      // bar fills linearly instead of rescaling as work is discovered.
-      let bar = ProgressBar::new(SCALE);
-      bar.set_style(
-        ProgressStyle::with_template("{spinner:.green} {msg:24!} {bar:32} {percent:>3}% eta {eta}")
-          .expect("static template is valid"),
-      );
-      bar.enable_steady_tick(Duration::from_millis(100));
-      Self { started, state, bar: Some(bar), ticker_stop: None, ticker: None }
-    }
+      })),
+      Backend::Bar => Some(std::thread::spawn(move || {
+        let mut frame = 0;
+        while let Err(RecvTimeoutError::Timeout) = rx.recv_timeout(Duration::from_millis(100)) {
+          draw(&ticker_state.lock().expect("no thread panics while holding this lock"), started.elapsed(), frame);
+          frame += 1;
+        }
+      })),
+      Backend::Silent => None,
+    };
+    Self { started, state, backend, ticker_stop: Some(tx), ticker }
   }
 
   fn locked(&self) -> std::sync::MutexGuard<'_, State> {
@@ -327,27 +391,20 @@ impl Progress {
     s.detail = None;
     s.stage_done = 0;
     s.stage_total = known_items;
-    let position = s.advance();
-    if let Some(bar) = &self.bar {
-      bar.set_position(position);
-      bar.set_message(stage.label().to_string());
-    } else {
+    s.advance();
+    if self.backend == Backend::Machine {
       emit(&s, self.started.elapsed());
     }
   }
 
   /// One work item finished. Machine mode does NOT report each step — the
-  /// once-per-second ticker covers cadence without flooding stderr.
+  /// once-per-second ticker covers cadence without flooding stderr — and
+  /// the bar picks the new position up on its next redraw.
   pub fn step(&self, detail: &str) {
     let mut s = self.locked();
     s.stage_done += 1;
     s.detail = if detail.is_empty() { None } else { Some(detail.to_string()) };
-    let position = s.advance();
-    if let Some(bar) = &self.bar {
-      bar.set_position(position);
-      let label = s.stage.label();
-      bar.set_message(if detail.is_empty() { label.to_string() } else { format!("{label}: {detail}") });
-    }
+    s.advance();
   }
 
   /// Successful completion: snap the position to 100%, emit the final
@@ -359,7 +416,7 @@ impl Progress {
       s.detail = None;
       s.stage_done = s.stage_total;
       s.position = SCALE;
-      if self.bar.is_none() {
+      if self.backend == Backend::Machine {
         emit(&s, self.started.elapsed());
       }
     }
@@ -371,8 +428,12 @@ impl Progress {
     if let Some(ticker) = self.ticker.take() {
       let _ = ticker.join();
     }
-    if let Some(bar) = self.bar.take() {
-      bar.finish_and_clear();
+    if self.backend == Backend::Bar {
+      use std::io::Write;
+      // The ticker has stopped, so this is the last write to the line.
+      let mut stderr = std::io::stderr().lock();
+      let _ = write!(stderr, "\r\x1b[2K");
+      let _ = stderr.flush();
     }
   }
 }
@@ -390,9 +451,36 @@ impl Drop for Progress {
 mod tests {
   use super::*;
 
-  // The human backend is indicatif rendering (visual, tty-only) and is not
-  // unit-tested; the machine wire format below and the end-to-end stderr
-  // stream (cli/tests/cli.rs) are.
+  // The human backend's terminal handling (tty detection, in-place redraw)
+  // is visual and not unit-tested; its line is, as are the machine wire
+  // format below and the end-to-end stderr stream (cli/tests/cli.rs).
+
+  #[test]
+  fn bar_line_shows_stage_item_progress_and_eta() {
+    let state = State {
+      stage: Stage::Snapshots,
+      detail: Some("blob 1a2b3c4d".into()),
+      stage_done: 3,
+      stage_total: 12,
+      position: 305,
+    };
+    let line = bar_line(&state, Duration::from_millis(1500), 0);
+    assert_eq!(line, "⠋ snapshotting: blob 1a2b… █████████·······················  30% eta 3s");
+    assert!(!line.contains('\n') && !line.contains('\r'), "one line, redrawn in place");
+    // A long item label is cut to the message area, so the bar never wraps.
+    let mut long = State { detail: Some("x".repeat(80)), ..state };
+    let cut = bar_line(&long, Duration::from_millis(1500), 3);
+    assert_eq!(cut.chars().count(), line.chars().count());
+    assert!(cut.starts_with("⠸ snapshotting: xxxxxxxxx…"), "{cut}");
+    // Minutes show as `Nm Ss`; no basis for an ETA shows as `-`; done is full.
+    long.position = 10;
+    assert!(bar_line(&long, Duration::from_secs(10), 0).ends_with("eta 16m 30s"));
+    long.position = 0;
+    assert!(bar_line(&long, Duration::ZERO, 0).ends_with("eta -"));
+    long.position = SCALE;
+    long.detail = None;
+    assert!(bar_line(&long, Duration::from_secs(1), 0).contains("████████████████████████████████ 100% eta 0s"));
+  }
 
   #[test]
   fn stage_spans_tile_the_bar() {

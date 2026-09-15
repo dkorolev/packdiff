@@ -16,11 +16,11 @@ description = "Pack a git diff into one self-contained HTML review page — with
 include = ["build.rs", "src/**", "assets/**", "examples/**", "tests/**", "engine/packdiff_wasm.wasm"]
 
 [features]
-# The binary and its terminal progress machinery (`indicatif`). On by
-# default so `cargo install packdiff` just works; library consumers depend
-# with `default-features = false`.
+# The binary and its terminal progress machinery. On by default so
+# `cargo install packdiff` just works; library consumers depend with
+# `default-features = false`.
 default = ["cli"]
-cli = ["dep:indicatif"]
+cli = []
 
 [[bin]]
 name = "packdiff"
@@ -29,4 +29,3 @@ required-features = ["cli"]
 
 [dependencies]
 packdiff-dto = { workspace = true }
-indicatif = { version = "0.17", optional = true }
