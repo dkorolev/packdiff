@@ -23,7 +23,7 @@ Ship the **same compiled data model to both sides of the tool**. The `packdiff-d
 | Crate | Dir | Kind | Deps | Role |
 | --- | --- | --- | --- | --- |
 | `packdiff-dto` | `dto/` | rlib | serde, serde_json | All data + semantics ([spec](DATA-MODEL.md)) |
-| `packdiff-wasm` | `wasm/` | cdylib+rlib | dto, serde, serde_json | Transport shim only ([ABI](WASM-ABI.md)) |
+| `packdiff-wasm` | `wasm/` | cdylib | dto, serde, serde_json | Transport shim only ([ABI](WASM-ABI.md)) |
 | `packdiff` | `cli/` | bin `packdiff` | dto, serde_json | argv, git, HTML rendering ([CLI](CLI.md)) |
 
 Boundary rules that keep the focus honest:
@@ -34,17 +34,16 @@ Boundary rules that keep the focus honest:
 
 ## Build pipeline
 
-`cli/build.rs` makes a plain `cargo build`/`cargo test` self-sufficient from a clean checkout:
+`cli/build.rs` hands the compiled engine to the crate via the `PACKDIFF_WASM_PATH` rustc-env (`lib.rs` does `include_bytes!(env!("PACKDIFF_WASM_PATH"))`), and finds it in one of two ways:
 
-1. It invokes `cargo build -p packdiff-wasm --release --target wasm32-unknown-unknown` with a **separate `--target-dir target-wasm/`** — separate because the outer cargo holds a lock on `target/`, and a nested build into the same dir would deadlock.
-2. It passes the artifact path to the CLI via the `PACKDIFF_WASM_PATH` rustc-env; `main.rs` does `include_bytes!(env!("PACKDIFF_WASM_PATH"))`.
-3. `rerun-if-changed` on `wasm/src` and `dto/src` keeps the embedded module fresh.
+1. **In a checkout** (the sibling `wasm/` crate exists) it invokes `cargo build -p packdiff-wasm --release --target wasm32-unknown-unknown` with a **separate `--target-dir target-wasm/`** — separate because the outer cargo holds a lock on `target/`, and a nested build into the same dir would deadlock. `rerun-if-changed` on `wasm/src` and `dto/src` keeps the embedded module fresh.
+2. **In the crates.io tarball** (no sibling crate) it uses `engine/packdiff_wasm.wasm`, the compiled engine that `./stage-engine.sh` places inside the cli crate right before `cargo package`/`cargo publish` (the file is gitignored and listed in the crate's `include`). Nothing is compiled for wasm, so `cargo install packdiff` — and any crate depending on `packdiff` — builds on a plain stable toolchain. A tarball packaged without staging fails its build with a message saying so.
 
 The workspace release profile is size-tuned (`opt-level="z"`, `lto`, `panic="abort"`, `strip`, one codegen unit) because the wasm module ships inside every page. The lexical highlighter increased the module from 242,395 to 270,250 bytes raw (+27,855 bytes, 11.5%) and from 323,196 to 360,336 bytes base64. Note `panic="abort"` means `cargo test --release` won't work; tests run in the default dev profile.
 
 ### Toolchain note
 
-The only prerequisite beyond stable Rust is the wasm32 std: `rustup target add wasm32-unknown-unknown`. If your system carries a distro cargo/rustc pair that shadows rustup's (symptom: `check-cfg` flag-mismatch errors, or thousands of "can't find crate" errors from the wasm build), make sure the rustup toolchain is first on PATH — the nested cargo in `build.rs` resolves `rustc` from the environment it inherits.
+Building from a checkout has one prerequisite beyond stable Rust, the wasm32 std: `rustup target add wasm32-unknown-unknown` (the crates.io release needs none). If your system carries a distro cargo/rustc pair that shadows rustup's (symptom: `check-cfg` flag-mismatch errors, or thousands of "can't find crate" errors from the wasm build), make sure the rustup toolchain is first on PATH — the nested cargo in `build.rs` resolves `rustc` from the environment it inherits.
 
 ## The generated page
 
@@ -72,7 +71,7 @@ Each layer is tested through its real interface, and the heavier layers test the
 
 `./test.sh` runs all of it, plus `cargo fmt --check` and a release-mode test pass. The same script is the pre-push hook (`.githooks/pre-push`; enable with `git config core.hooksPath .githooks`) and the CI gate (`.github/workflows/ci.yml`). A clean checkout stays green: tests missing a prerequisite (git, Node) skip with a hint rather than fail.
 
-CI runs two further jobs that need the network and so stay out of `test.sh`: **package** verify-builds all three crate tarballs with the cli's build script on its registry-shim path (the crates.io install path — see [PUBLISHING.md](../PUBLISHING.md)), and **semver** runs `cargo semver-checks` on `packdiff-dto` against the latest published release, so a breaking API change cannot ride a patch-level bump into the auto-publishing merge.
+CI runs two further jobs that need the network and so stay out of `test.sh`: **package** stages the engine, verify-builds all three crate tarballs, and then installs the cli tarball on a toolchain with the wasm target removed (the crates.io install path, as a user without the target sees it — see [PUBLISHING.md](../PUBLISHING.md)), and **semver** runs `cargo semver-checks` on `packdiff-dto` against the latest published release, so a breaking API change cannot ride a patch-level bump into the auto-publishing merge.
 
 ## Web layer stance
 
@@ -91,15 +90,16 @@ The three crates go to crates.io in dependency order:
 ```console
 $ cargo publish -p packdiff-dto
 $ cargo publish -p packdiff-wasm
-$ cargo publish -p packdiff
+$ cargo publish -p packdiff --allow-dirty
 ```
 
-The `packdiff` crate's verification build (and every user's `cargo install packdiff`) compiles the wasm engine via the shim in cli/build.rs against the registry, so the two library crates must exist there first. For a full pre-publish dry run before anything is on the registry:
+The `packdiff` crate's tarball ships the compiled engine, so it must be staged first; cargo then reports the staged file as uncommitted, hence `--allow-dirty` (the tree itself must be clean). For a full pre-publish dry run:
 
 ```console
-$ PACKDIFF_WASM_SRC=$PWD/wasm cargo package --workspace
+$ ./stage-engine.sh
+$ cargo package --workspace --allow-dirty
 ```
 
-which verifies all three tarballs with the shim pointed at the local wasm crate instead of crates.io.
+which verifies all three tarballs exactly as `cargo install packdiff` will build them.
 
 The shared version is defined once in `[workspace.package]`, and the internal `packdiff-dto` dependency is pinned once in `[workspace.dependencies]` (the `cli` and `wasm` crates reference it as `{ workspace = true }`). The full release playbook — version reconciliation, ordering, and the crates.io policy — is in [../PUBLISHING.md](../PUBLISHING.md).

@@ -54,7 +54,17 @@ packdiff/
 
 ## Install
 
-Prerequisites: stable Rust with the wasm32 target, and git.
+Prerequisites: stable Rust and git.
+
+From crates.io — the release ships the page's comment engine precompiled, so this is all it takes:
+
+```console
+$ cargo install packdiff
+$ packdiff --version
+packdiff 0.9.0
+```
+
+Building from source compiles that engine for `wasm32-unknown-unknown`, so the `--git` and checkout installs below need the target once:
 
 ```console
 $ rustup target add wasm32-unknown-unknown
@@ -64,14 +74,6 @@ Straight from this repository:
 
 ```console
 $ cargo install --git https://github.com/dkorolev/packdiff packdiff
-$ packdiff --version
-packdiff 0.9.0
-```
-
-From crates.io:
-
-```console
-$ cargo install packdiff
 ```
 
 From a local checkout:
