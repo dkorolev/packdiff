@@ -925,6 +925,13 @@
     return ta;
   }
 
+  // Focus now, reveal a moment later: the click that opened this editor may be the first
+  // half of a double-click, and scrolling under the pointer would send the second half
+  // to some other line.
+  function focusEditor(ta) {
+    ta.focus({ preventScroll: true });
+    setTimeout(() => { if (ta.isConnected) ta.scrollIntoView({ block: 'nearest' }); }, 350);
+  }
   function openTableEditor(afterRow, anchor, existing) {
     if (focusExisting(anchor, existing)) return;
     const tr = document.createElement('tr');
@@ -941,7 +948,7 @@
     } else {
       afterComments(afterRow).after(tr);
     }
-    ta.focus();
+    focusEditor(ta);
   }
   function openPreviewEditor(block, anchor, existing) {
     if (focusExisting(anchor, existing)) return;
@@ -956,7 +963,7 @@
     } else {
       commentsBoxAfter(block).appendChild(div);
     }
-    ta.focus();
+    focusEditor(ta);
   }
   function openEditorFor(c) {
     const anchor = { file: c.file, side: c.side, line: c.line };
@@ -991,6 +998,20 @@
     }
     if (!gbtn && ev.target.closest('button, a, input, textarea, .comment-card, .pd-editor')) {
       closeEmptyNewEditors(null);
+      return;
+    }
+    // Commenting is a deliberate single click. A gesture that leaves text selected (a
+    // drag, a shift-click) is the reader selecting code to copy, and so is any
+    // double- or triple-click — whose first click was a plain one and opened an editor.
+    const selection = window.getSelection();
+    const selecting = selection && !selection.isCollapsed && selection.toString().trim() !== '';
+    if (!gbtn && (selecting || ev.detail > 1)) {
+      if (ev.detail > 1) {
+        // Closing the editor moves focus, which would drop the word just selected.
+        const kept = selection && selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+        closeEmptyNewEditors(null);
+        if (kept) { selection.removeAllRanges(); selection.addRange(kept); }
+      }
       return;
     }
     ev.preventDefault();
@@ -1286,9 +1307,14 @@
     path.textContent = f.old_path && f.new_path && f.old_path !== f.new_path
       ? f.old_path + ' → ' + f.new_path : (f.new_path || f.old_path);
     left.appendChild(path);
+    details.dataset.path = f.new_path || f.old_path;
+    left.appendChild(fileCopyButton('copy-path', 'copy path', "Copy the file's path"));
     summary.appendChild(left);
     const right = document.createElement('span');
     right.className = 'file-right';
+    if (fileTextAt(rangeTo, f.new_path) !== null) {
+      right.appendChild(fileCopyButton('copy-file', 'copy file', "Copy the file's full contents, as this range leaves it"));
+    }
     const stats = document.createElement('span');
     stats.className = 'stats';
     const adds = document.createElement('span');
@@ -1350,7 +1376,8 @@
           tr.appendChild(cell('gutter', ''));
           tr.appendChild(cell('ln', p.old !== undefined ? String(p.old) : ''));
           tr.appendChild(cell('ln', p.new !== undefined ? String(p.new) : ''));
-          const code = cell('code', sign);
+          const code = cell('code', '');
+          code.appendChild(signEl(sign));
           const source = document.createElement('span');
           source.className = 'code-line';
           if (highlighted) source.innerHTML = highlighted[lineIndex];
@@ -1496,7 +1523,7 @@
     tr.appendChild(newLn);
     const code = document.createElement('td');
     code.className = 'code';
-    code.appendChild(document.createTextNode(' '));
+    code.appendChild(signEl(' '));
     const source = document.createElement('span');
     source.className = 'code-line';
     if (highlighted !== null) source.innerHTML = highlighted;
@@ -1581,6 +1608,50 @@
   });
 
   // ---- exports ----
+  // The +/−/space marker of a unified diff line: shown, never selected or copied.
+  function signEl(sign) {
+    const el = document.createElement('span');
+    el.className = 'sign';
+    el.textContent = sign;
+    return el;
+  }
+
+  // ---- copy a file's path or its whole text ----
+  let snapshotStore;
+  // `boundary` indexes the snapshot store's commit boundaries; null is the diff's end.
+  function fileTextAt(boundary, path) {
+    if (!SNAPSHOTS || !path) return null;
+    if (snapshotStore === undefined) {
+      try { snapshotStore = JSON.parse(SNAPSHOTS); } catch (e) { snapshotStore = null; }
+    }
+    if (!snapshotStore) return null;
+    const at = snapshotStore.boundaries[boundary === null ? snapshotStore.boundaries.length - 1 : boundary];
+    const id = at && at.files[path];
+    const text = id === undefined ? null : snapshotStore.blobs[id];
+    return typeof text === 'string' ? text : null;
+  }
+  function fileCopyButton(kind, label, title) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = kind;
+    btn.title = title;
+    btn.textContent = label;
+    return btn;
+  }
+  // The buttons live inside <summary>: copy, and keep the panel as it was.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button.copy-path, button.copy-file');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const file = btn.closest('details.file');
+    const path = file.dataset.newPath || file.dataset.path;
+    if (btn.classList.contains('copy-path')) { copyText(path, btn); return; }
+    const text = fileTextAt(file.closest('#files-range') ? rangeTo : null, path);
+    if (text === null) showError('This file\'s contents are not in the page.');
+    else copyText(text, btn);
+  });
+
   function copyText(text, btn) {
     const done = () => {
       if (!btn) { showToast('Copied'); return; }

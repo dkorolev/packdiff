@@ -328,7 +328,7 @@ fn render_notes_panel(anchor: &str, d: &packdiff_dto::diff::NotesFile) -> String
   for (i, line) in lines.iter().enumerate() {
     let line_no = (i + 1) as u32;
     raw_rows.push_str(&format!(
-      r#"<tr class="ctx commentable" data-file="{anchor}" data-side="New" data-line="{line_no}">{gutter}<td class="ln"></td><td class="ln">{line_no}</td><td class="code"> {text}</td></tr>"#,
+      r#"<tr class="ctx commentable" data-file="{anchor}" data-side="New" data-line="{line_no}">{gutter}<td class="ln"></td><td class="ln">{line_no}</td><td class="code"><span class="sign"> </span>{text}</td></tr>"#,
       gutter = gutter_cell(&anchor, "New", line_no),
       text = esc(line),
     ));
@@ -383,7 +383,7 @@ fn gutter_cell(anchor: &str, side: &str, line_no: u32) -> String {
 /// the content was not snapshotted. It parameterizes the page's
 /// expand-context control — the player learns every gap size from these two
 /// numbers plus the hunk headers, with no probing.
-fn render_file(index: usize, f: &FileDiff, endpoint_lines: Option<(usize, usize)>) -> String {
+fn render_file(index: usize, f: &FileDiff, endpoint_lines: Option<(usize, usize)>, has_text: bool) -> String {
   let badge = status_badge(f.status);
   let notes: String = f.notes.iter().map(|n| format!(r#"<div class="muted note">{}</div>"#, esc(n))).collect();
   let renderable_markdown =
@@ -424,7 +424,7 @@ fn render_file(index: usize, f: &FileDiff, endpoint_lines: Option<(usize, usize)
         };
         let html = highlighted.as_ref().map_or_else(|| esc(text), |lines| lines[line_index].clone());
         rows.push_str(&format!(
-          r#"<tr class="{class} commentable" data-file="{anchor}" data-side="{side}" data-line="{line_no}">{gutter}<td class="ln">{old}</td><td class="ln">{new}</td><td class="code">{sign}<span class="code-line">{html}</span></td></tr>"#,
+          r#"<tr class="{class} commentable" data-file="{anchor}" data-side="{side}" data-line="{line_no}">{gutter}<td class="ln">{old}</td><td class="ln">{new}</td><td class="code"><span class="sign">{sign}</span><span class="code-line">{html}</span></td></tr>"#,
           gutter = gutter_cell(&anchor, side, line_no),
         ));
       }
@@ -446,6 +446,17 @@ fn render_file(index: usize, f: &FileDiff, endpoint_lines: Option<(usize, usize)
     }
   };
 
+  // The whole file, as the diff leaves it — offered only when that text rides in the
+  // page's snapshot store (not for deleted, binary, or oversized files).
+  let copy_file = if has_text {
+    format!(
+      r#"<button type="button" class="copy-file" title="Copy the file's full contents, as this diff leaves it" aria-label="Copy the contents of {}">copy file</button>
+"#,
+      esc(&path)
+    )
+  } else {
+    String::new()
+  };
   let old_path_attr = f.old_path.as_deref().map(|p| format!(r#" data-old-path="{}""#, esc(p))).unwrap_or_default();
   let new_path_attr = f.new_path.as_deref().map(|p| format!(r#" data-new-path="{}""#, esc(p))).unwrap_or_default();
   let lines_attr =
@@ -453,9 +464,9 @@ fn render_file(index: usize, f: &FileDiff, endpoint_lines: Option<(usize, usize)
   format!(
     r##"<details class="file" id="file-{index}" open data-anchor="{anchor}" data-path="{path}"{old_path_attr}{new_path_attr}{lines_attr} data-status="{letter}" data-adds="{adds}" data-dels="{dels}">
 <summary class="file-summary">
-<span class="file-left">{badge}<span class="path" title="{path}">{path}</span></span>
+<span class="file-left">{badge}<span class="path" title="{path}">{path}</span><button type="button" class="copy-path" title="Copy the file's path" aria-label="Copy the path of {path}">copy path</button></span>
 <span class="file-right">
-{toggle}
+{copy_file}{toggle}
 <button type="button" class="file-wrap-toggle" aria-pressed="true">Wrap</button>
 <span class="file-comment-count" data-role="file-comment-count" hidden></span>
 <span class="file-draft-count" data-role="file-draft-count" hidden></span>
@@ -470,6 +481,7 @@ fn render_file(index: usize, f: &FileDiff, endpoint_lines: Option<(usize, usize)
     path = esc(&path),
     letter = status_letter(f.status),
     badge = badge,
+    copy_file = copy_file,
     toggle = toggle,
     adds = f.additions,
     dels = f.deletions,
@@ -520,10 +532,19 @@ pub fn render_page(doc: &DiffDocument, title: Option<&str>, wasm_bytes: &[u8]) -
     let new = count_at(&snap.boundaries.last()?.files, f.new_path.as_deref())?;
     Some((old, new))
   };
+  // Whether the file's final text is in the snapshot store — what "copy file" copies.
+  let has_text = |f: &FileDiff| -> bool {
+    let text = || {
+      let snap = doc.snapshots.as_ref()?;
+      let id = snap.boundaries.last()?.files.get(f.new_path.as_deref()?)?;
+      snap.blobs.get(id)?.as_deref()
+    };
+    text().is_some()
+  };
   let files_html: String = if doc.files.is_empty() {
     String::new()
   } else {
-    doc.files.iter().enumerate().map(|(i, f)| render_file(i, f, endpoint_lines(f))).collect()
+    doc.files.iter().enumerate().map(|(i, f)| render_file(i, f, endpoint_lines(f), has_text(f))).collect()
   };
   let file_list_html = render_file_list(&doc.files);
   let short = |sha: &str| sha[..sha.len().min(12)].to_string();
