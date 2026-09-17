@@ -20,9 +20,11 @@ Please follow the shared [engineering principles](https://github.com/dkorolev/pr
 ## Diff and file interaction
 
 - Keep the modern `+` comment gutter, but make the entire valid diff line a comment target.
+- Commenting is a deliberate single click. Selecting text — a drag, a shift-click, a double- or triple-click — never opens a comment, and what it copies is code: no `+`/`-` markers, no line numbers.
 - Wrap long lines by default. Make `Wrap | Scroll` a persistent per-file choice.
 - Use the same persistent `Markdown | Source` choice for Markdown files and the Description section.
 - File headers remain one stable row. Keep path, stats, Viewed, comment/draft counts, and relevant view controls; omit previous/next arrows.
+- Every file header offers `copy path` right after the path and, when the file's text rides in the page, `copy file`: the whole file as the diff (or the selected commit range) leaves it. Deleted, binary, and oversized files offer the path only.
 - Files and top-level sections start expanded. Persist explicit collapse state. A collapsed file with review data shows comment and draft counts.
 - Reopen persisted drafts visibly at their original anchors.
 - When a direct inline action expands or contracts content, preserve its local interaction anchor when naturally possible; do not globally fight scrolling.

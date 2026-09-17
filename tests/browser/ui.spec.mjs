@@ -851,3 +851,91 @@ test.describe('several description commits', () => {
     expect(stored).toContain('PR-DESCRIPTION.md@');
   });
 });
+
+test('selecting diff text copies clean code and never opens a comment', async ({ page }) => {
+  const file = page.locator('details.file[data-path="hello.py"]');
+  const from = file.locator('tr.add .code-line', { hasText: 'def evil():' });
+  const to = file.locator('tr.add .code-line', { hasText: 'return 42' });
+  await from.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  // Mouse gestures go by coordinates: wait until the page under them has stopped moving
+  // (previews and lazy tables are still laying out right after load).
+  let a = await from.boundingBox();
+  for (let settled = 0; settled < 3;) {
+    await page.waitForTimeout(100);
+    const next = await from.boundingBox();
+    settled = next.y === a.y ? settled + 1 : 0;
+    a = next;
+  }
+  const b = await to.boundingBox();
+  await page.mouse.move(a.x + 1, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 5 });
+  await page.mouse.move(b.x + b.width - 1, b.y + b.height / 2, { steps: 5 });
+  await page.mouse.up();
+  // The drag ended in a click on a commentable line; it must stay a selection.
+  await expect(page.locator('.pd-editor')).toHaveCount(0);
+  // No +/- markers and no line numbers: what is copied is the code.
+  const selected = await page.evaluate(() => window.getSelection().toString());
+  expect(selected.split('\n').map((line) => line.trimEnd()).filter(Boolean)).toEqual(['def evil():', '    return 42']);
+
+  // A double-click selects a word; that is not a request to comment either.
+  await page.evaluate(() => window.getSelection().removeAllRanges());
+  // …even at the bottom edge of the viewport, where revealing the editor that the first
+  // click opens would scroll the line out from under the second.
+  await to.evaluate((el) => el.scrollIntoView({ block: 'end' }));
+  const word = await to.evaluate((el) => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = node.data.indexOf('return');
+      if (at < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + 'return'.length);
+      const box = range.getBoundingClientRect();
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    }
+  });
+  await page.mouse.dblclick(word.x, word.y);
+  await expect(page.locator('.pd-editor')).toHaveCount(0);
+  expect(await page.evaluate(() => window.getSelection().toString().trim())).toBe('return');
+
+  // A plain click still is.
+  await page.evaluate(() => window.getSelection().removeAllRanges());
+  await from.click();
+  await expect(page.locator('.pd-editor')).toHaveCount(1);
+});
+
+test('file headers copy the path and the whole file', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__copied = [];
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: (text) => { window.__copied.push(text); return Promise.resolve(); } },
+    });
+  });
+  const file = page.locator('details.file[data-path="hello.py"]');
+  await file.locator('button.copy-path').click();
+  await file.locator('button.copy-file').click();
+  expect(await page.evaluate(() => window.__copied)).toEqual([
+    'hello.py',
+    "def hello():\n    return 'hello'\n\ndef evil():\n    return 42\n",
+  ]);
+  // The buttons sit in <summary>; using them does not collapse the file.
+  await expect(file).toHaveAttribute('open', '');
+  await expect(file.locator('button.copy-file')).toHaveText('Copied!');
+
+  // No text in the page, no offer to copy it: deleted and binary files keep only the path.
+  for (const path of ['todelete.txt', 'blob.bin']) {
+    const other = page.locator(`details.file[data-path="${path}"]`);
+    await expect(other.locator('button.copy-path')).toHaveCount(1);
+    await expect(other.locator('button.copy-file')).toHaveCount(0);
+  }
+
+  // A commit range copies the file as that range leaves it.
+  await page.locator('tr.commit.selectable').first().click();
+  const ranged = page.locator('#files-range details.file', { hasText: 'hello.py' });
+  await ranged.locator('button.copy-file').click();
+  expect((await page.evaluate(() => window.__copied)).at(-1)).toBe(
+    "def hello():\n    return 'hello'\n\ndef evil():\n    return 42\n",
+  );
+});

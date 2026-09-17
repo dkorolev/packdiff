@@ -626,14 +626,17 @@ tr.commit.selectable:hover td { background: var(--panel); }
 tr.commit.selected td { background: var(--select-bg); }
 tr.commit.range-preview td { background: var(--accent-soft); }
 tr.commit[aria-selected="true"] td { background: var(--select-bg); }
-button.copy-sha {
-  margin-left: 6px;
+button.copy-sha, button.copy-path, button.copy-file {
   min-height: 22px;
   padding: 0 6px;
   font-size: 10px;
   color: var(--muted);
 }
-button.copy-sha:hover { color: var(--fg); }
+button.copy-sha { margin-left: 6px; }
+button.copy-path, button.copy-file { flex-shrink: 0; white-space: nowrap; }
+button.copy-sha:hover, button.copy-path:hover, button.copy-file:hover { color: var(--fg); }
+/* The +/−/space marker is shown but stays out of selections, so copied code is code. */
+table.diff td.code .sign { user-select: none; }
 
 #range-bar {
   border: 1px solid var(--border);
@@ -699,7 +702,7 @@ details.file:not([open]) > summary.file-summary {
 }
 .file-summary .path {
   min-width: 0;
-  flex: 1 1 160px;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
